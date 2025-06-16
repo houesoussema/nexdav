@@ -1,8 +1,19 @@
 import os
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP # Import FastMCP for building the MCP server
-from caldav_service import CalDAVService # Import our CalDAV service logic
+from caldav_service import CalDAVService, CalDAVConnectionError # Import our CalDAV service logic
 from datetime import datetime
+import pytz # Import pytz for timezone handling
+from icalendar import Calendar # For iCalendar parsing
+import logging
+
+# Configure basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    handlers=[logging.StreamHandler()] # Log to stdout
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from a .env file.
 # This allows sensitive information (like URLs, usernames, passwords)
@@ -40,7 +51,18 @@ async def list_caldav_calendars() -> list:
               with 'name' (display name) and 'url'.
               Example: [{"name": "Personal Calendar", "url": "https://.../calendars/user/personal/"}]
     """
-    return await caldav_service.get_calendars()
+    logger.info("Tool 'list_caldav_calendars' called.")
+    try:
+        result = await caldav_service.get_calendars()
+        logger.info("Successfully listed CalDAV calendars.")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'list_caldav_calendars': {str(e)}")
+        return [{"status": "error", "message": f"CalDAV connection error: {str(e)}"}] # Adjusted to return list as per type hint
+    except Exception as e:
+        logger.exception("An unexpected error occurred in 'list_caldav_calendars'")
+        return [{"status": "error", "message": f"An unexpected error occurred: {str(e)}"}]
+
 
 @mcp.tool()
 async def list_caldav_events(calendar_url: str, start_date: str = None, end_date: str = None) -> list:
@@ -61,10 +83,27 @@ async def list_caldav_events(calendar_url: str, start_date: str = None, end_date
               iCalendar (VCS) content of the event.
               Example: [{"url": "https://.../event1.ics", "data": "BEGIN:VCALENDAR..."}]
     """
+    logger.info(f"Tool 'list_caldav_events' called for calendar: {calendar_url}, start: {start_date}, end: {end_date}")
     # Convert string dates to datetime objects for the CalDAV service
-    s_date_obj = datetime.strptime(start_date, '%Y-%m-%d') if start_date else None
-    e_date_obj = datetime.strptime(end_date, '%Y-%m-%d') if end_date else None
-    return await caldav_service.get_events(calendar_url, s_date_obj, e_date_obj)
+    s_date_obj = None
+    if start_date:
+        s_date_obj = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
+
+    e_date_obj = None
+    if end_date:
+        e_date_obj = datetime.strptime(end_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
+
+    try:
+        result = await caldav_service.get_events(calendar_url, s_date_obj, e_date_obj)
+        logger.info(f"Successfully listed events for calendar: {calendar_url}.")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'list_caldav_events' for calendar {calendar_url}: {str(e)}")
+        return [{"status": "error", "message": f"CalDAV connection error: {str(e)}"}] # Adjusted for list type hint
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in 'list_caldav_events' for calendar {calendar_url}")
+        return [{"status": "error", "message": f"An unexpected error occurred: {str(e)}"}]
+
 
 @mcp.tool()
 async def create_caldav_event(calendar_url: str, ical_content: str) -> dict:
@@ -85,7 +124,23 @@ async def create_caldav_event(calendar_url: str, ical_content: str) -> dict:
               and the 'event_url' of the newly created event.
               Example: {"status": "success", "event_url": "https://.../new_event.ics"}
     """
-    return await caldav_service.create_event(calendar_url, ical_content)
+    logger.info(f"Tool 'create_caldav_event' called for calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    try:
+        Calendar.from_ical(ical_content) # Validate iCalendar content
+    except ValueError as e: # Specific exception for icalendar parsing errors
+        logger.error(f"Invalid iCalendar content in 'create_caldav_event': {str(e)}")
+        return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
+
+    try:
+        result = await caldav_service.create_event(calendar_url, ical_content)
+        logger.info(f"Successfully created event: {result.get('event_url')} in calendar: {calendar_url}")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'create_caldav_event': {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception("An unexpected error occurred in 'create_caldav_event'")
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
 @mcp.tool()
 async def update_caldav_event(event_url: str, ical_content: str) -> dict:
@@ -105,7 +160,23 @@ async def update_caldav_event(event_url: str, ical_content: str) -> dict:
               and the 'event_url' of the updated event.
               Example: {"status": "success", "event_url": "https://.../updated_event.ics"}
     """
-    return await caldav_service.update_event(event_url, ical_content)
+    logger.info(f"Tool 'update_caldav_event' called for event: {event_url} with ical_content (length: {len(ical_content)})")
+    try:
+        Calendar.from_ical(ical_content) # Validate iCalendar content
+    except ValueError as e: # Specific exception for icalendar parsing errors
+        logger.error(f"Invalid iCalendar content in 'update_caldav_event' for event {event_url}: {str(e)}")
+        return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
+
+    try:
+        result = await caldav_service.update_event(event_url, ical_content)
+        logger.info(f"Successfully updated event: {result.get('event_url')}")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'update_caldav_event' for event {event_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in 'update_caldav_event' for event {event_url}")
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
 @mcp.tool()
 async def delete_caldav_event(event_url: str) -> dict:
@@ -123,7 +194,17 @@ async def delete_caldav_event(event_url: str) -> dict:
               and the 'event_url' that was deleted.
               Example: {"status": "success", "event_url": "https://.../deleted_event.ics"}
     """
-    return await caldav_service.delete_event(event_url)
+    logger.info(f"Tool 'delete_caldav_event' called for event: {event_url}")
+    try:
+        result = await caldav_service.delete_event(event_url)
+        logger.info(f"Successfully deleted event: {event_url}")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'delete_caldav_event' for event {event_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in 'delete_caldav_event' for event {event_url}")
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
 # --- New Task (VTODO) Specific MCP Tools ---
 
@@ -144,7 +225,18 @@ async def list_caldav_tasks(calendar_url: str, include_completed: bool = False) 
               iCalendar (VCS) content of the task.
               Example: [{"url": "https://.../task1.ics", "data": "BEGIN:VCALENDAR...BEGIN:VTODO..."}]
     """
-    return await caldav_service.get_tasks(calendar_url, include_completed)
+    logger.info(f"Tool 'list_caldav_tasks' called for calendar: {calendar_url}, include_completed: {include_completed}")
+    try:
+        result = await caldav_service.get_tasks(calendar_url, include_completed)
+        logger.info(f"Successfully listed tasks for calendar: {calendar_url}.")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'list_caldav_tasks' for calendar {calendar_url}: {str(e)}")
+        return [{"status": "error", "message": f"CalDAV connection error: {str(e)}"}] # Adjusted for list type hint
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in 'list_caldav_tasks' for calendar {calendar_url}")
+        return [{"status": "error", "message": f"An unexpected error occurred: {str(e)}"}]
+
 
 @mcp.tool()
 async def create_caldav_task(calendar_url: str, ical_content: str) -> dict:
@@ -165,7 +257,23 @@ async def create_caldav_task(calendar_url: str, ical_content: str) -> dict:
               and the 'task_url' of the newly created task.
               Example: {"status": "success", "task_url": "https://.../new_task.ics"}
     """
-    return await caldav_service.create_task(calendar_url, ical_content)
+    logger.info(f"Tool 'create_caldav_task' called for calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    try:
+        Calendar.from_ical(ical_content) # Validate iCalendar content
+    except ValueError as e: # Specific exception for icalendar parsing errors
+        logger.error(f"Invalid iCalendar content in 'create_caldav_task': {str(e)}")
+        return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
+
+    try:
+        result = await caldav_service.create_task(calendar_url, ical_content)
+        logger.info(f"Successfully created task: {result.get('task_url')} in calendar: {calendar_url}")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'create_caldav_task': {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception("An unexpected error occurred in 'create_caldav_task'")
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
 @mcp.tool()
 async def update_caldav_task(task_url: str, ical_content: str) -> dict:
@@ -185,7 +293,23 @@ async def update_caldav_task(task_url: str, ical_content: str) -> dict:
               and the 'task_url' of the updated task.
               Example: {"status": "success", "task_url": "https://.../updated_task.ics"}
     """
-    return await caldav_service.update_task(task_url, ical_content)
+    logger.info(f"Tool 'update_caldav_task' called for task: {task_url} with ical_content (length: {len(ical_content)})")
+    try:
+        Calendar.from_ical(ical_content) # Validate iCalendar content
+    except ValueError as e: # Specific exception for icalendar parsing errors
+        logger.error(f"Invalid iCalendar content in 'update_caldav_task' for task {task_url}: {str(e)}")
+        return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
+
+    try:
+        result = await caldav_service.update_task(task_url, ical_content)
+        logger.info(f"Successfully updated task: {result.get('task_url')}")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'update_caldav_task' for task {task_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in 'update_caldav_task' for task {task_url}")
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
 @mcp.tool()
 async def delete_caldav_task(task_url: str) -> dict:
@@ -203,13 +327,23 @@ async def delete_caldav_task(task_url: str) -> dict:
               and the 'task_url' that was deleted.
               Example: {"status": "success", "task_url": "https://.../deleted_task.ics"}
     """
-    return await caldav_service.delete_task(task_url)
+    logger.info(f"Tool 'delete_caldav_task' called for task: {task_url}")
+    try:
+        result = await caldav_service.delete_task(task_url)
+        logger.info(f"Successfully deleted task: {task_url}")
+        return result
+    except CalDAVConnectionError as e:
+        logger.error(f"CalDAV connection error in 'delete_caldav_task' for task {task_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in 'delete_caldav_task' for task {task_url}")
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
 
 # This block ensures the MCP server starts when the script is executed directly.
 # The `transport="stdio"` tells the MCP server to communicate over standard input/output,
 # which is how the `mcp-superassistant-proxy` will interact with it.
 if __name__ == "__main__":
-    print("Starting MCP CalDAV Server...")
+    logger.info("Starting MCP CalDAV Server...")
     mcp.run(transport="stdio")
-    print("MCP CalDAV Server stopped.") # This line will typically not be reached as the server runs indefinitely
+    logger.info("MCP CalDAV Server stopped.") # This line will typically not be reached as the server runs indefinitely

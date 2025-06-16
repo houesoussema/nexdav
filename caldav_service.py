@@ -1,7 +1,18 @@
 import caldav
 from caldav.elements import dav
+from caldav.lib.error import AuthorizationError as CalDAVAuthorizationError # Renamed to avoid conflict
 from datetime import datetime, date, timedelta
 import pytz # For timezone handling
+import requests # For requests.exceptions.ConnectionError
+from icalendar import Calendar # For parsing iCalendar data
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Custom exception for CalDAV connection errors
+class CalDAVConnectionError(Exception):
+    """Custom exception for errors during CalDAV server connection or authentication."""
+    pass
 
 class CalDAVService:
     """
@@ -26,14 +37,26 @@ class CalDAVService:
     async def connect(self):
         """
         Establishes a connection to the CalDAV server and retrieves the principal.
-        This method should be called before performing any calendar or task operations.
+        Raises CalDAVConnectionError if connection or authentication fails.
         """
-        self.client = caldav.DAVClient(
-            url=self.url,
-            username=self.username,
-            password=self.password
-        )
-        self.principal = await self.client.principal()
+        logger.info(f"Attempting to connect to CalDAV server at {self.url} for user {self.username}...")
+        try:
+            self.client = caldav.DAVClient(
+                url=self.url,
+                username=self.username,
+                password=self.password
+            )
+            self.principal = await self.client.principal()
+            logger.info("Successfully connected to CalDAV server and fetched principal.")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"CalDAV connection failed for {self.url}: {e}")
+            raise CalDAVConnectionError(f"Connection to CalDAV server failed: {e}")
+        except CalDAVAuthorizationError as e:
+            logger.error(f"CalDAV authentication failed for user {self.username} at {self.url}: {e}")
+            raise CalDAVConnectionError(f"Authentication failed for CalDAV server: {e}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during CalDAV connection for {self.url}: {e}", exc_info=True)
+            raise CalDAVConnectionError(f"An unexpected error occurred during CalDAV connection: {e}")
 
     async def get_calendars(self):
         """
@@ -45,9 +68,11 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
-        calendars = await self.principal.calendars()
-        # Extract display name and URL for each calendar
-        return [{"name": cal.get_property(dav.DisplayName()), "url": str(cal.url)} for cal in calendars]
+        logger.info("Fetching calendars...")
+        calendars_list_raw = await self.principal.calendars()
+        calendars_list = [{"name": cal.get_property(dav.DisplayName()), "url": str(cal.url)} for cal in calendars_list_raw]
+        logger.info(f"Found {len(calendars_list)} calendars.")
+        return calendars_list
 
     async def get_events(self, calendar_url: str, start_date: datetime = None, end_date: datetime = None):
         """
@@ -66,6 +91,7 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Fetching events for calendar: {calendar_url}, start: {start_date}, end: {end_date}")
         
         # Get the specific calendar object by its URL
         calendar = await self.client.calendar(url=calendar_url)
@@ -78,11 +104,12 @@ class CalDAVService:
             end_date = now + timedelta(days=365) # Default: next year
 
         # Perform a date-range search for events
-        events = await calendar.date_search(start=start_date, end=end_date)
+        events_raw = await calendar.date_search(start=start_date, end=end_date)
         
         event_list = []
-        for event in events:
-            event_list.append({"url": str(event.url), "data": event.data})
+        for event_obj in events_raw: # Renamed to avoid confusion if event was a var name
+            event_list.append({"url": str(event_obj.url), "data": event_obj.data})
+        logger.info(f"Found {len(event_list)} events for calendar: {calendar_url}.")
         return event_list
 
     async def create_event(self, calendar_url: str, ical_content: str):
@@ -99,8 +126,10 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Attempting to create event in calendar: {calendar_url}")
         calendar = await self.client.calendar(url=calendar_url)
         event = await calendar.save_event(ical=ical_content)
+        logger.info(f"Successfully created event: {str(event.url)} in calendar: {calendar_url}")
         return {"status": "success", "event_url": str(event.url)}
 
     async def update_event(self, event_url: str, ical_content: str):
@@ -117,9 +146,11 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Attempting to update event at URL: {event_url}")
         event = await self.client.event(url=event_url)
         event.data = ical_content
         await event.save()
+        logger.info(f"Successfully updated event: {str(event.url)}")
         return {"status": "success", "event_url": str(event.url)}
 
     async def delete_event(self, event_url: str):
@@ -135,8 +166,10 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Attempting to delete event at URL: {event_url}")
         event = await self.client.event(url=event_url)
         await event.delete()
+        logger.info(f"Successfully deleted event: {event_url}")
         return {"status": "success", "event_url": event_url}
 
     # --- Task (VTODO) Specific Methods ---
@@ -155,21 +188,31 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Fetching tasks for calendar: {calendar_url}, include_completed: {include_completed}")
         
-        calendar = await self.client.calendar(url=calendar_url)
-        tasks = await calendar.todos() # Get all tasks
+        calendar_obj = await self.client.calendar(url=calendar_url) # Renamed to avoid conflict with icalendar.Calendar
+        tasks_raw = await calendar_obj.todos() # Get all tasks
 
         task_list = []
-        for task in tasks:
-            # You might want to parse task.data here to check completion status
-            # For simplicity, we'll return all and filter later if needed,
-            # or rely on the client to filter.
+        for task_obj in tasks_raw: # task_obj is a caldav Task object
             if not include_completed:
-                # Basic check for completion, requires parsing VTODO content for STATUS
-                # This would be more robust with a vobject parser.
-                if "STATUS:COMPLETED" in task.data: # Very simplistic check
-                    continue
-            task_list.append({"url": str(task.url), "data": task.data})
+                try:
+                    cal = Calendar.from_ical(task_obj.data)
+                    is_completed = False
+                    for component in cal.walk():
+                        if component.name == 'VTODO':
+                            status = component.get('status')
+                            if status and str(status).upper() == 'COMPLETED':
+                                is_completed = True
+                                break # Found VTODO and it's completed
+                    if is_completed:
+                        continue # Skip this task
+                except ValueError:
+                    logger.warning(f"Could not parse task data for URL {task_obj.url}. Skipping.", exc_info=True)
+                    pass # Skip tasks that can't be parsed if filtering for completed status
+
+            task_list.append({"url": str(task_obj.url), "data": task_obj.data})
+        logger.info(f"Found {len(task_list)} tasks for calendar: {calendar_url}.")
         return task_list
 
     async def create_task(self, calendar_url: str, ical_content: str):
@@ -186,9 +229,11 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Attempting to create task in calendar: {calendar_url}")
         calendar = await self.client.calendar(url=calendar_url)
         # The save_todo method is typically used for VTODOs
         task = await calendar.save_todo(ical=ical_content)
+        logger.info(f"Successfully created task: {str(task.url)} in calendar: {calendar_url}")
         return {"status": "success", "task_url": str(task.url)}
 
     async def update_task(self, task_url: str, ical_content: str):
@@ -205,9 +250,11 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Attempting to update task at URL: {task_url}")
         task = await self.client.todo(url=task_url)
         task.data = ical_content
         await task.save()
+        logger.info(f"Successfully updated task: {str(task.url)}")
         return {"status": "success", "task_url": str(task.url)}
 
     async def delete_task(self, task_url: str):
@@ -223,6 +270,8 @@ class CalDAVService:
         """
         if not self.principal:
             await self.connect()
+        logger.info(f"Attempting to delete task at URL: {task_url}")
         task = await self.client.todo(url=task_url)
         await task.delete()
+        logger.info(f"Successfully deleted task: {task_url}")
         return {"status": "success", "task_url": task_url}
