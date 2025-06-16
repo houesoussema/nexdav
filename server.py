@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP # Import FastMCP for building the MCP server
 from caldav_service import CalDAVService, CalDAVConnectionError # Import our CalDAV service logic
+import json # For parsing CALDAV_ACCOUNTS
 from datetime import datetime
 import pytz # Import pytz for timezone handling
 from icalendar import Calendar # For iCalendar parsing
@@ -24,14 +25,37 @@ load_dotenv()
 # This names our server, which will be visible to tools that interact with it.
 mcp = FastMCP("CalDAV Nextcloud Integration")
 
-# Initialize CalDAVService with credentials retrieved from environment variables.
-# It's crucial that CALDAV_URL, CALDAV_USERNAME, and CALDAV_PASSWORD are set
-# in the .env file or as system environment variables.
-caldav_service = CalDAVService(
-    url=os.getenv("CALDAV_URL"),
-    username=os.getenv("CALDAV_USERNAME"),
-    password=os.getenv("CALDAV_PASSWORD")
-)
+# Initialize CalDAVService instances from CALDAV_ACCOUNTS environment variable
+caldav_services_map: dict[str, CalDAVService] = {}
+try:
+    accounts_json = os.getenv("CALDAV_ACCOUNTS", "[]")
+    accounts_config = json.loads(accounts_json)
+    if not isinstance(accounts_config, list):
+        logger.error("CALDAV_ACCOUNTS is not a list. Initializing with no accounts.")
+        accounts_config = []
+
+    for account in accounts_config:
+        if isinstance(account, dict) and "url" in account and "username" in account and "password" in account:
+            service = CalDAVService(
+                url=account["url"],
+                username=account["username"],
+                password=account["password"]
+            )
+            if account["url"] in caldav_services_map:
+                logger.warning(f"Duplicate CalDAV account URL found: {account['url']}. Overwriting previous entry.")
+            caldav_services_map[account["url"]] = service
+            logger.info(f"Successfully initialized CalDAV service for account URL: {account['url']}")
+        else:
+            logger.error(f"Invalid account configuration found: {account}. Skipping.")
+except json.JSONDecodeError as e:
+    logger.error(f"Failed to parse CALDAV_ACCOUNTS JSON: {str(e)}. Initializing with no accounts.")
+    caldav_services_map = {} # Ensure it's empty on error
+except Exception as e:
+    logger.error(f"An unexpected error occurred during CalDAV services initialization: {str(e)}. Initializing with no accounts.")
+    caldav_services_map = {} # Ensure it's empty on error
+
+if not caldav_services_map:
+    logger.warning("No CalDAV accounts configured or all configurations failed. CalDAV tools may not function as expected.")
 
 # --- MCP Tool Definitions using @mcp.tool() decorators ---
 # Each function decorated with @mcp.tool() becomes an accessible tool
@@ -41,35 +65,53 @@ caldav_service = CalDAVService(
 @mcp.tool()
 async def list_caldav_calendars() -> list:
     """
-    Lists all available CalDAV calendars for the configured user.
+    Lists all available CalDAV calendars from all configured accounts.
 
-    This tool connects to the CalDAV server and retrieves a list of all
-    calendars the authenticated user has access to.
+    This tool connects to each configured CalDAV server and retrieves a list of
+    calendars the authenticated user for that account has access to.
+    Each calendar dictionary in the returned list will include an 'account_identifier'
+    key, which is the URL of the CalDAV account it belongs to.
 
     Returns:
         list: A list of dictionaries, where each dictionary represents a calendar
-              with 'name' (display name) and 'url'.
-              Example: [{"name": "Personal Calendar", "url": "https://.../calendars/user/personal/"}]
+              with 'name' (display name), 'url', and 'account_identifier'.
+              Example: [{"name": "Personal Calendar", "url": "https://.../personal/", "account_identifier": "https://your-caldav-server.com/dav/"}]
+              Returns an empty list if no accounts are configured or no calendars are found.
+              Individual account connection errors are logged but do not stop other accounts from being processed.
     """
     logger.info("Tool 'list_caldav_calendars' called.")
-    try:
-        result = await caldav_service.get_calendars()
-        logger.info("Successfully listed CalDAV calendars.")
-        return result
-    except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'list_caldav_calendars': {str(e)}")
-        return [{"status": "error", "message": f"CalDAV connection error: {str(e)}"}] # Adjusted to return list as per type hint
-    except Exception as e:
-        logger.exception("An unexpected error occurred in 'list_caldav_calendars'")
-        return [{"status": "error", "message": f"An unexpected error occurred: {str(e)}"}]
+    if not caldav_services_map:
+        logger.warning("No CalDAV accounts configured. Returning empty list for calendars.")
+        return []
+
+    all_calendars = []
+    for account_url, service_instance in caldav_services_map.items():
+        try:
+            logger.info(f"Fetching calendars for account: {account_url}")
+            calendars = await service_instance.get_calendars()
+            for calendar in calendars:
+                calendar['account_identifier'] = account_url # Add account identifier
+            all_calendars.extend(calendars)
+            logger.info(f"Successfully listed {len(calendars)} calendars for account: {account_url}")
+        except CalDAVConnectionError as e:
+            logger.error(f"CalDAV connection error for account {account_url} in 'list_caldav_calendars': {str(e)}")
+            # Optionally, include error information in the response if needed, for now, just log and continue.
+        except Exception as e:
+            logger.exception(f"An unexpected error occurred for account {account_url} in 'list_caldav_calendars'")
+            # Optionally, include error information for this account.
+
+    if not all_calendars:
+        logger.info("No calendars found across all configured accounts.")
+    return all_calendars
 
 
 @mcp.tool()
-async def list_caldav_events(calendar_url: str, start_date: str = None, end_date: str = None) -> list:
+async def list_caldav_events(account_identifier: str, calendar_url: str, start_date: str = None, end_date: str = None) -> list:
     """
-    Lists events from a specified CalDAV calendar within an optional date range.
+    Lists events from a specified CalDAV calendar of a specific account, within an optional date range.
 
     Args:
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         calendar_url (str): The absolute URL of the calendar to query events from.
                             This URL can be obtained from `list_caldav_calendars` tool output.
         start_date (str, optional): The start date for the event search in 'YYYY-MM-DD' format.
@@ -81,10 +123,15 @@ async def list_caldav_events(calendar_url: str, start_date: str = None, end_date
         list: A list of dictionaries, each representing an event with its 'url'
               and raw iCalendar 'data'. The 'data' field contains the full
               iCalendar (VCS) content of the event.
+              Returns an error structure if the account_identifier is invalid.
               Example: [{"url": "https://.../event1.ics", "data": "BEGIN:VCALENDAR..."}]
     """
-    logger.info(f"Tool 'list_caldav_events' called for calendar: {calendar_url}, start: {start_date}, end: {end_date}")
-    # Convert string dates to datetime objects for the CalDAV service
+    logger.info(f"Tool 'list_caldav_events' called for account: {account_identifier}, calendar: {calendar_url}, start: {start_date}, end: {end_date}")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found in configured services for 'list_caldav_events'.")
+        return [{"status": "error", "message": f"Account identifier '{account_identifier}' not found."}]
+
     s_date_obj = None
     if start_date:
         s_date_obj = datetime.strptime(start_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
@@ -94,250 +141,261 @@ async def list_caldav_events(calendar_url: str, start_date: str = None, end_date
         e_date_obj = datetime.strptime(end_date, '%Y-%m-%d').replace(tzinfo=pytz.UTC)
 
     try:
-        result = await caldav_service.get_events(calendar_url, s_date_obj, e_date_obj)
-        logger.info(f"Successfully listed events for calendar: {calendar_url}.")
+        result = await service.get_events(calendar_url, s_date_obj, e_date_obj)
+        logger.info(f"Successfully listed events for account {account_identifier}, calendar: {calendar_url}.")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'list_caldav_events' for calendar {calendar_url}: {str(e)}")
-        return [{"status": "error", "message": f"CalDAV connection error: {str(e)}"}] # Adjusted for list type hint
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'list_caldav_events' for calendar {calendar_url}: {str(e)}")
+        return [{"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}]
     except Exception as e:
-        logger.exception(f"An unexpected error occurred in 'list_caldav_events' for calendar {calendar_url}")
-        return [{"status": "error", "message": f"An unexpected error occurred: {str(e)}"}]
+        logger.exception(f"An unexpected error occurred for account {account_identifier} in 'list_caldav_events' for calendar {calendar_url}")
+        return [{"status": "error", "message": f"An unexpected error occurred for account {account_identifier}: {str(e)}"}]
 
 
 @mcp.tool()
-async def create_caldav_event(calendar_url: str, ical_content: str) -> dict:
+async def create_caldav_event(account_identifier: str, calendar_url: str, ical_content: str) -> dict:
     """
-    Creates a new event in the specified CalDAV calendar using iCalendar (VCS) content.
-
-    This tool expects the event details to be provided as a complete iCalendar string.
-    Tools like Claude would typically construct this iCalendar string based on user input.
+    Creates a new event in the specified CalDAV calendar of a specific account using iCalendar (VCS) content.
 
     Args:
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         calendar_url (str): The absolute URL of the calendar where the event will be created.
-                            This URL can be obtained from `list_caldav_calendars` tool output.
         ical_content (str): The full iCalendar (VCS) string for the event.
-                            Example: "BEGIN:VCALENDAR...BEGIN:VEVENT...END:VEVENT...END:VCALENDAR"
 
     Returns:
         dict: A dictionary indicating the 'status' of the operation ('success')
               and the 'event_url' of the newly created event.
-              Example: {"status": "success", "event_url": "https://.../new_event.ics"}
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'create_caldav_event' called for calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    logger.info(f"Tool 'create_caldav_event' called for account: {account_identifier}, calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found in configured services for 'create_caldav_event'.")
+        return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
+
     try:
         Calendar.from_ical(ical_content) # Validate iCalendar content
-    except ValueError as e: # Specific exception for icalendar parsing errors
-        logger.error(f"Invalid iCalendar content in 'create_caldav_event': {str(e)}")
+    except ValueError as e:
+        logger.error(f"Invalid iCalendar content for account {account_identifier} in 'create_caldav_event': {str(e)}")
         return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
 
     try:
-        result = await caldav_service.create_event(calendar_url, ical_content)
-        logger.info(f"Successfully created event: {result.get('event_url')} in calendar: {calendar_url}")
+        result = await service.create_event(calendar_url, ical_content)
+        logger.info(f"Successfully created event for account {account_identifier}: {result.get('event_url')} in calendar: {calendar_url}")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'create_caldav_event': {str(e)}")
-        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'create_caldav_event': {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}
     except Exception as e:
-        logger.exception("An unexpected error occurred in 'create_caldav_event'")
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+        logger.exception(f"An unexpected error occurred for account {account_identifier} in 'create_caldav_event'")
+        return {"status": "error", "message": f"An unexpected error occurred for account {account_identifier}: {str(e)}"}
 
 @mcp.tool()
-async def update_caldav_event(event_url: str, ical_content: str) -> dict:
+async def update_caldav_event(account_identifier: str, event_url: str, ical_content: str) -> dict:
     """
-    Updates an existing CalDAV event with new iCalendar content.
-
-    The event is identified by its unique URL. The provided iCalendar content
-    will completely replace the existing event data.
+    Updates an existing CalDAV event in a specific account with new iCalendar content.
 
     Args:
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         event_url (str): The absolute URL of the event to be updated.
-                         This URL can be obtained from `list_caldav_events` tool output.
         ical_content (str): The new full iCalendar (VCS) string for the event.
 
     Returns:
         dict: A dictionary indicating the 'status' of the operation ('success')
               and the 'event_url' of the updated event.
-              Example: {"status": "success", "event_url": "https://.../updated_event.ics"}
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'update_caldav_event' called for event: {event_url} with ical_content (length: {len(ical_content)})")
+    logger.info(f"Tool 'update_caldav_event' called for account: {account_identifier}, event: {event_url} with ical_content (length: {len(ical_content)})")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found in configured services for 'update_caldav_event'.")
+        return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
+
     try:
         Calendar.from_ical(ical_content) # Validate iCalendar content
-    except ValueError as e: # Specific exception for icalendar parsing errors
-        logger.error(f"Invalid iCalendar content in 'update_caldav_event' for event {event_url}: {str(e)}")
+    except ValueError as e:
+        logger.error(f"Invalid iCalendar content for account {account_identifier} in 'update_caldav_event' for event {event_url}: {str(e)}")
         return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
 
     try:
-        result = await caldav_service.update_event(event_url, ical_content)
-        logger.info(f"Successfully updated event: {result.get('event_url')}")
+        result = await service.update_event(event_url, ical_content)
+        logger.info(f"Successfully updated event for account {account_identifier}: {result.get('event_url')}")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'update_caldav_event' for event {event_url}: {str(e)}")
-        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'update_caldav_event' for event {event_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}
     except Exception as e:
-        logger.exception(f"An unexpected error occurred in 'update_caldav_event' for event {event_url}")
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+        logger.exception(f"An unexpected error occurred for account {account_identifier} in 'update_caldav_event' for event {event_url}")
+        return {"status": "error", "message": f"An unexpected error occurred for account {account_identifier}: {str(e)}"}
 
 @mcp.tool()
-async def delete_caldav_event(event_url: str) -> dict:
+async def delete_caldav_event(account_identifier: str, event_url: str) -> dict:
     """
-    Deletes an event from the CalDAV server.
-
-    The event to be deleted is identified by its unique URL.
+    Deletes an event from a specific CalDAV account's server.
 
     Args:
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         event_url (str): The absolute URL of the event to be deleted.
-                         This URL can be obtained from `list_caldav_events` tool output.
 
     Returns:
         dict: A dictionary indicating the 'status' of the operation ('success')
               and the 'event_url' that was deleted.
-              Example: {"status": "success", "event_url": "https://.../deleted_event.ics"}
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'delete_caldav_event' called for event: {event_url}")
+    logger.info(f"Tool 'delete_caldav_event' called for account: {account_identifier}, event: {event_url}")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found in configured services for 'delete_caldav_event'.")
+        return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
+
     try:
-        result = await caldav_service.delete_event(event_url)
-        logger.info(f"Successfully deleted event: {event_url}")
+        result = await service.delete_event(event_url)
+        logger.info(f"Successfully deleted event for account {account_identifier}: {event_url}")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'delete_caldav_event' for event {event_url}: {str(e)}")
-        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'delete_caldav_event' for event {event_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}
     except Exception as e:
-        logger.exception(f"An unexpected error occurred in 'delete_caldav_event' for event {event_url}")
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+        logger.exception(f"An unexpected error occurred for account {account_identifier} in 'delete_caldav_event' for event {event_url}")
+        return {"status": "error", "message": f"An unexpected error occurred for account {account_identifier}: {str(e)}"}
 
 # --- New Task (VTODO) Specific MCP Tools ---
 
 @mcp.tool()
-async def list_caldav_tasks(calendar_url: str, include_completed: bool = False) -> list:
+async def list_caldav_tasks(account_identifier: str, calendar_url: str, include_completed: bool = False) -> list:
     """
-    Lists tasks (VTODOs) from a specified CalDAV calendar.
+    Lists tasks (VTODOs) from a specified CalDAV calendar of a specific account.
 
     Args:
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         calendar_url (str): The absolute URL of the calendar to query tasks from.
-                            This URL can be obtained from `list_caldav_calendars` tool output.
-        include_completed (bool, optional): If True, completed tasks will be included in the results.
-                                            Defaults to False (only incomplete tasks).
+        include_completed (bool, optional): If True, completed tasks will be included. Defaults to False.
 
     Returns:
-        list: A list of dictionaries, each representing a task with its 'url'
-              and raw iCalendar 'data'. The 'data' field contains the full
-              iCalendar (VCS) content of the task.
-              Example: [{"url": "https://.../task1.ics", "data": "BEGIN:VCALENDAR...BEGIN:VTODO..."}]
+        list: A list of dictionaries, each representing a task with 'url' and 'data'.
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'list_caldav_tasks' called for calendar: {calendar_url}, include_completed: {include_completed}")
+    logger.info(f"Tool 'list_caldav_tasks' called for account: {account_identifier}, calendar: {calendar_url}, include_completed: {include_completed}")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found for 'list_caldav_tasks'.")
+        return [{"status": "error", "message": f"Account identifier '{account_identifier}' not found."}]
+
     try:
-        result = await caldav_service.get_tasks(calendar_url, include_completed)
-        logger.info(f"Successfully listed tasks for calendar: {calendar_url}.")
+        result = await service.get_tasks(calendar_url, include_completed)
+        logger.info(f"Successfully listed tasks for account {account_identifier}, calendar: {calendar_url}.")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'list_caldav_tasks' for calendar {calendar_url}: {str(e)}")
-        return [{"status": "error", "message": f"CalDAV connection error: {str(e)}"}] # Adjusted for list type hint
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'list_caldav_tasks' for calendar {calendar_url}: {str(e)}")
+        return [{"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}]
     except Exception as e:
-        logger.exception(f"An unexpected error occurred in 'list_caldav_tasks' for calendar {calendar_url}")
-        return [{"status": "error", "message": f"An unexpected error occurred: {str(e)}"}]
+        logger.exception(f"An unexpected error for account {account_identifier} in 'list_caldav_tasks' for calendar {calendar_url}")
+        return [{"status": "error", "message": f"An unexpected error for account {account_identifier}: {str(e)}"}]
 
 
 @mcp.tool()
-async def create_caldav_task(calendar_url: str, ical_content: str) -> dict:
+async def create_caldav_task(account_identifier: str, calendar_url: str, ical_content: str) -> dict:
     """
-    Creates a new task (VTODO) in the specified CalDAV calendar using iCalendar (VCS) content.
-
-    This tool expects the task details to be provided as a complete iCalendar string
-    containing a VTODO component.
+    Creates a new task (VTODO) in a specified CalDAV calendar of a specific account.
 
     Args:
-        calendar_url (str): The absolute URL of the calendar where the task will be created.
-                            This URL can be obtained from `list_caldav_calendars` tool output.
-        ical_content (str): The full iCalendar (VCS) string for the task.
-                            Example: "BEGIN:VCALENDAR...BEGIN:VTODO...END:VTODO...END:VCALENDAR"
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
+        calendar_url (str): The URL of the calendar where the task will be created.
+        ical_content (str): The iCalendar (VCS) string for the task.
 
     Returns:
-        dict: A dictionary indicating the 'status' of the operation ('success')
-              and the 'task_url' of the newly created task.
-              Example: {"status": "success", "task_url": "https://.../new_task.ics"}
+        dict: Status of operation and 'task_url' of the new task.
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'create_caldav_task' called for calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    logger.info(f"Tool 'create_caldav_task' called for account: {account_identifier}, calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found for 'create_caldav_task'.")
+        return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
+
     try:
         Calendar.from_ical(ical_content) # Validate iCalendar content
-    except ValueError as e: # Specific exception for icalendar parsing errors
-        logger.error(f"Invalid iCalendar content in 'create_caldav_task': {str(e)}")
+    except ValueError as e:
+        logger.error(f"Invalid iCalendar content for account {account_identifier} in 'create_caldav_task': {str(e)}")
         return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
 
     try:
-        result = await caldav_service.create_task(calendar_url, ical_content)
-        logger.info(f"Successfully created task: {result.get('task_url')} in calendar: {calendar_url}")
+        result = await service.create_task(calendar_url, ical_content)
+        logger.info(f"Successfully created task for account {account_identifier}: {result.get('task_url')} in calendar: {calendar_url}")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'create_caldav_task': {str(e)}")
-        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'create_caldav_task': {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}
     except Exception as e:
-        logger.exception("An unexpected error occurred in 'create_caldav_task'")
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+        logger.exception(f"An unexpected error for account {account_identifier} in 'create_caldav_task'")
+        return {"status": "error", "message": f"An unexpected error for account {account_identifier}: {str(e)}"}
 
 @mcp.tool()
-async def update_caldav_task(task_url: str, ical_content: str) -> dict:
+async def update_caldav_task(account_identifier: str, task_url: str, ical_content: str) -> dict:
     """
-    Updates an existing CalDAV task (VTODO) with new iCalendar content.
-
-    The task is identified by its unique URL. The provided iCalendar content
-    will completely replace the existing task data.
+    Updates an existing CalDAV task (VTODO) in a specific account.
 
     Args:
-        task_url (str): The absolute URL of the task to be updated.
-                        This URL can be obtained from `list_caldav_tasks` tool output.
-        ical_content (str): The new full iCalendar (VCS) string for the task.
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
+        task_url (str): The URL of the task to be updated.
+        ical_content (str): The new iCalendar (VCS) string for the task.
 
     Returns:
-        dict: A dictionary indicating the 'status' of the operation ('success')
-              and the 'task_url' of the updated task.
-              Example: {"status": "success", "task_url": "https://.../updated_task.ics"}
+        dict: Status of operation and 'task_url' of the updated task.
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'update_caldav_task' called for task: {task_url} with ical_content (length: {len(ical_content)})")
+    logger.info(f"Tool 'update_caldav_task' called for account: {account_identifier}, task: {task_url} with ical_content (length: {len(ical_content)})")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found for 'update_caldav_task'.")
+        return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
+
     try:
         Calendar.from_ical(ical_content) # Validate iCalendar content
-    except ValueError as e: # Specific exception for icalendar parsing errors
-        logger.error(f"Invalid iCalendar content in 'update_caldav_task' for task {task_url}: {str(e)}")
+    except ValueError as e:
+        logger.error(f"Invalid iCalendar content for account {account_identifier} in 'update_caldav_task' for task {task_url}: {str(e)}")
         return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
 
     try:
-        result = await caldav_service.update_task(task_url, ical_content)
-        logger.info(f"Successfully updated task: {result.get('task_url')}")
+        result = await service.update_task(task_url, ical_content)
+        logger.info(f"Successfully updated task for account {account_identifier}: {result.get('task_url')}")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'update_caldav_task' for task {task_url}: {str(e)}")
-        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'update_caldav_task' for task {task_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}
     except Exception as e:
-        logger.exception(f"An unexpected error occurred in 'update_caldav_task' for task {task_url}")
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+        logger.exception(f"An unexpected error for account {account_identifier} in 'update_caldav_task' for task {task_url}")
+        return {"status": "error", "message": f"An unexpected error for account {account_identifier}: {str(e)}"}
 
 @mcp.tool()
-async def delete_caldav_task(task_url: str) -> dict:
+async def delete_caldav_task(account_identifier: str, task_url: str) -> dict:
     """
-    Deletes a task (VTODO) from the CalDAV server.
-
-    The task to be deleted is identified by its unique URL.
+    Deletes a task (VTODO) from a specific CalDAV account's server.
 
     Args:
-        task_url (str): The absolute URL of the task to be deleted.
-                        This URL can be obtained from `list_caldav_tasks` tool output.
+        account_identifier (str): The URL of the CalDAV account (serves as its identifier).
+        task_url (str): The URL of the task to be deleted.
 
     Returns:
-        dict: A dictionary indicating the 'status' of the operation ('success')
-              and the 'task_url' that was deleted.
-              Example: {"status": "success", "task_url": "https://.../deleted_task.ics"}
+        dict: Status of operation and 'task_url' that was deleted.
+              Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'delete_caldav_task' called for task: {task_url}")
+    logger.info(f"Tool 'delete_caldav_task' called for account: {account_identifier}, task: {task_url}")
+    service = caldav_services_map.get(account_identifier)
+    if not service:
+        logger.error(f"Account identifier '{account_identifier}' not found for 'delete_caldav_task'.")
+        return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
+
     try:
-        result = await caldav_service.delete_task(task_url)
-        logger.info(f"Successfully deleted task: {task_url}")
+        result = await service.delete_task(task_url)
+        logger.info(f"Successfully deleted task for account {account_identifier}: {task_url}")
         return result
     except CalDAVConnectionError as e:
-        logger.error(f"CalDAV connection error in 'delete_caldav_task' for task {task_url}: {str(e)}")
-        return {"status": "error", "message": f"CalDAV connection error: {str(e)}"}
+        logger.error(f"CalDAV connection error for account {account_identifier} in 'delete_caldav_task' for task {task_url}: {str(e)}")
+        return {"status": "error", "message": f"CalDAV connection error for account {account_identifier}: {str(e)}"}
     except Exception as e:
-        logger.exception(f"An unexpected error occurred in 'delete_caldav_task' for task {task_url}")
-        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+        logger.exception(f"An unexpected error for account {account_identifier} in 'delete_caldav_task' for task {task_url}")
+        return {"status": "error", "message": f"An unexpected error for account {account_identifier}: {str(e)}"}
 
 
 # This block ensures the MCP server starts when the script is executed directly.

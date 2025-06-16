@@ -22,6 +22,7 @@ This project provides an MCP (Model Context Protocol) server that enables Claude
 
 ## Features
 - **List Calendars:** Retrieve a list of all available calendars for the configured user.
+- **Multi-Account Support:** Configure and use multiple CalDAV accounts simultaneously.
 - **List Events:** Fetch events from a specified calendar within a given date range.
 - **Create Event:** Add new events to a calendar using iCalendar (VCS) content.
 - **Update Event:** Modify existing events by providing new iCalendar content.
@@ -56,14 +57,23 @@ Sensitive information like your CalDAV URL, username, and password should not be
 
 1.  **Create `.env` file:** Copy the provided `.env.example` to `.env` in the root of the project directory:
         cp .env.example .env
-2.  **Edit `.env`:** Open the newly created `.env` file and fill in your actual Nextcloud CalDAV credentials:
+2.  **Edit `.env`:** Open the newly created `.env` file and fill in your actual CalDAV account details.
+        The `CALDAV_ACCOUNTS` variable should be a JSON string representing a list of account objects. Each object in the list must have `url`, `username`, and `password` keys.
+
         # .env
-        CALDAV_URL="https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/"
-        CALDAV_USERNAME="your_nextcloud_username"
-        CALDAV_PASSWORD="your_nextcloud_app_password"
-    *   **`CALDAV_URL`**: This is the base URL for your CalDAV calendar. You can usually find this in your Nextcloud Calendar settings (e.g., under "CalDAV primary URL" or "WebDAV / CalDAV"). Remember to include your username in the path as shown in the example.
-    *   **`CALDAV_USERNAME`**: Your Nextcloud login username.
-    *   **`CALDAV_PASSWORD`**: **Strongly recommended:** Use an "App password" generated in your Nextcloud user security settings. This limits the scope of the password and can be revoked independently.
+        # Define CalDAV accounts as a JSON string.
+        # Each object in the list should have "url", "username", and "password".
+        # Example for two accounts:
+        # CALDAV_ACCOUNTS='[
+        #   {"url": "https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/", "username": "your_nextcloud_username", "password": "your_nextcloud_app_password"},
+        #   {"url": "https://another-caldav-server.com/dav/principals/users/another_user/", "username": "another_user", "password": "another_password"}
+        # ]'
+        CALDAV_ACCOUNTS='[{"url": "https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/", "username": "your_nextcloud_username", "password": "your_nextcloud_app_password"}]'
+
+    *   **`CALDAV_ACCOUNTS`**: A JSON string list. Each item needs:
+        *   `"url"`: The base CalDAV URL for the account (e.g., Nextcloud's primary CalDAV URL, often ending with `/dav/calendars/YOUR_USERNAME/` or similar).
+        *   `"username"`: The username for that CalDAV account.
+        *   `"password"`: The password (preferably an app-specific password) for that account.
 
 ### 3. Install Dependencies
 Navigate to the project directory and install the required Python packages:
@@ -85,11 +95,9 @@ To make your new CalDAV server available to Claude, you need to configure your `
           "mcpServers": {
             "nexdav-mcp": {
               "command": "python",
-              "args": ["C:/MCP/Servers/Dev/nexdav/server.py"],
+              "args": ["/absolute/path/to/your/mcp-caldav-server/server.py"], // Adjusted path for clarity
               "env": {
-                "CALDAV_URL": "https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/",
-                "CALDAV_USERNAME": "your_nextcloud_username",
-                "CALDAV_PASSWORD": "your_nextcloud_app_password"
+                "CALDAV_ACCOUNTS": "[{\"url\": \"https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/\", \"username\": \"your_nextcloud_username\", \"password\": \"your_nextcloud_app_password\"}]"
               }
             }
           }
@@ -115,23 +123,23 @@ Once integrated, Claude will be able to discover and use the tools provided by t
 The following tools are exposed by this MCP server. All tools include improved error handling for CalDAV server connection issues and will return an error message if the server cannot be reached or authentication fails. Errors related to invalid input (like malformed iCalendar data) are also reported.
 
 -   `caldav-nextcloud.list_caldav_calendars()`
-    -   Lists all calendars accessible to the configured user.
--   `caldav-nextcloud.list_caldav_events(calendar_url: str, start_date: str = None, end_date: str = None)`
-    -   Lists events from a specific calendar. Dates should be 'YYYY-MM-DD'. Input dates are treated as UTC.
--   `caldav-nextcloud.create_caldav_event(calendar_url: str, ical_content: str)`
-    -   Creates a new event with a full iCalendar string. Validates the provided `ical_content`. Returns an error if the content is not parsable.
--   `caldav-nextcloud.update_caldav_event(event_url: str, ical_content: str)`
-    -   Updates an existing event with a full iCalendar string. Validates the provided `ical_content`. Returns an error if the content is not parsable.
--   `caldav-nextcloud.delete_caldav_event(event_url: str)`
-    -   Deletes an event by its URL.
--   `caldav-nextcloud.list_caldav_tasks(calendar_url: str, include_completed: bool = False)`
-    -   Lists tasks (VTODOs) from a specific calendar. `include_completed` is optional. Uses iCalendar parsing for accurate status filtering.
--   `caldav-nextcloud.create_caldav_task(calendar_url: str, ical_content: str)`
-    -   Creates a new task with a full iCalendar string (VTODO). Validates the provided `ical_content`. Returns an error if the content is not parsable.
--   `caldav-nextcloud.update_caldav_task(task_url: str, ical_content: str)`
-    -   Updates an existing task with a full iCalendar string (VTODO). Validates the provided `ical_content`. Returns an error if the content is not parsable.
--   `caldav-nextcloud.delete_caldav_task(task_url: str)`
-    -   Deletes a task by its URL.
+    -   Retrieves a list of all calendars accessible to the configured CalDAV accounts. Each calendar object returned will include an `account_identifier` field, which is the URL of the account the calendar belongs to. This identifier is crucial for subsequent operations.
+-   `caldav-nextcloud.list_caldav_events(account_identifier: str, calendar_url: str, start_date: str = None, end_date: str = None)`
+    -   Lists events from a specific calendar of a specific account. Uses the `account_identifier` (obtained from `list_caldav_calendars`) to select the CalDAV account. Dates should be 'YYYY-MM-DD' and are treated as UTC.
+-   `caldav-nextcloud.create_caldav_event(account_identifier: str, calendar_url: str, ical_content: str)`
+    -   Creates a new event in a specific calendar of a specific account. Uses `account_identifier`. Validates `ical_content`.
+-   `caldav-nextcloud.update_caldav_event(account_identifier: str, event_url: str, ical_content: str)`
+    -   Updates an existing event in a specific account. Uses `account_identifier`. Validates `ical_content`.
+-   `caldav-nextcloud.delete_caldav_event(account_identifier: str, event_url: str)`
+    -   Deletes an event from a specific account by its URL. Uses `account_identifier`.
+-   `caldav-nextcloud.list_caldav_tasks(account_identifier: str, calendar_url: str, include_completed: bool = False)`
+    -   Lists tasks (VTODOs) from a specific calendar of a specific account. Uses `account_identifier`. `include_completed` is optional.
+-   `caldav-nextcloud.create_caldav_task(account_identifier: str, calendar_url: str, ical_content: str)`
+    -   Creates a new task in a specific account. Uses `account_identifier`. Validates `ical_content`.
+-   `caldav-nextcloud.update_caldav_task(account_identifier: str, task_url: str, ical_content: str)`
+    -   Updates an existing task in a specific account. Uses `account_identifier`. Validates `ical_content`.
+-   `caldav-nextcloud.delete_caldav_task(account_identifier: str, task_url: str)`
+    -   Deletes a task from a specific account by its URL. Uses `account_identifier`.
 
 ## API Documentation
 
@@ -139,14 +147,21 @@ The following tools are exposed by this MCP server. All tools include improved e
 This API provides a way for MCP (Model Context Protocol) clients, such as Claude, to interact with a CalDAV server, with a specific focus on Nextcloud Calendar integration. It allows for managing calendar events and tasks. The API is structured around a set of tools (endpoints) that perform specific actions like listing calendars, creating events, or deleting tasks.
 
 ### Authentication
-Authentication with the CalDAV server is handled via environment variables loaded by the server at startup. These variables are:
--   `CALDAV_URL`: The base URL of your CalDAV server (e.g., `https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/`).
--   `CALDAV_USERNAME`: Your CalDAV username.
--   `CALDAV_PASSWORD`: Your CalDAV password.
+Authentication with the CalDAV server(s) is handled via the `CALDAV_ACCOUNTS` environment variable loaded by the server at startup.
+-   `CALDAV_ACCOUNTS`: This is a JSON string representing a list of account objects. Each object in the list must define:
+    -   `"url"`: The base URL of the CalDAV server for that account (e.g., `https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/`).
+    -   `"username"`: The CalDAV username for that account.
+    -   `"password"`: The CalDAV password (or app-specific password) for that account.
 
-It is **strongly recommended** to use an "App Password" generated in your Nextcloud security settings for the `CALDAV_PASSWORD` instead of your main account password. This enhances security by limiting the scope of the password and allowing it to be revoked independently.
+    Example structure for `CALDAV_ACCOUNTS` in your `.env` file:
+        CALDAV_ACCOUNTS='[
+          {"url": "https://primary-caldav.example.com/dav/", "username": "user1", "password": "password1"},
+          {"url": "https://secondary-caldav.example.org/dav/users/user2/", "username": "user2", "password": "password2"}
+        ]'
 
-Refer to the "Setup Instructions" section for details on configuring the `.env` file with these credentials.
+It is **strongly recommended** to use an "App Password" (if your CalDAV provider supports it, like Nextcloud) for the password field of each account. This enhances security by limiting the scope of the password and allowing it to be revoked independently.
+
+Refer to the "Setup Instructions" section for details on configuring the `.env` file.
 
 ### Error Handling
 The API uses a consistent JSON format for error responses:
@@ -183,28 +198,36 @@ Common error types include:
 ### Endpoints (Tools)
 
 #### `caldav-nextcloud.list_caldav_calendars()`
--   **Description:** Retrieves a list of all calendars accessible to the configured CalDAV user. This is typically the first call an MCP client would make to discover available calendars.
+-   **Description:** Retrieves a list of all calendars accessible to the configured CalDAV accounts. This is typically the first call an MCP client would make to discover available calendars and their `account_identifier`.
 -   **MCP Tool Name:** `caldav-nextcloud.list_caldav_calendars`
 -   **Parameters:** None.
--   **Successful Response:** A list of JSON objects, where each object represents a calendar.
+-   **Successful Response:** A list of JSON objects, where each object represents a calendar. Each calendar object now includes an `account_identifier` field, which is the URL of the CalDAV account it belongs to. This identifier is required for all other operations.
     Example:
         [
             {
                 "name": "Personal",
-                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/"
+                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/",
+                "account_identifier": "https://your-nextcloud.com/remote.php/dav/calendars/YOUR_USERNAME/"
             },
             {
                 "name": "Work",
-                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/work_calendar/"
+                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/work_calendar/",
+                "account_identifier": "https://your-nextcloud.com/remote.php/dav/calendars/YOUR_USERNAME/"
+            },
+            {
+                "name": "User2 Calendar",
+                "url": "https://another-caldav-server.com/dav/principals/users/another_user/calendar1/",
+                "account_identifier": "https://another-caldav-server.com/dav/principals/users/another_user/"
             }
         ]
--   **Error Responses:** Refer to the general "Error Handling" section for connection errors. The error response will be a list containing a single error object.
--   **Example Usage (Conceptual):** An MCP client calls this tool to get a list of calendars. The user might then be prompted to choose a calendar from this list for subsequent operations like listing events or creating a new one.
+-   **Error Responses:** Refer to the general "Error Handling" section for connection errors. If individual accounts fail, errors are logged, and calendars from accessible accounts are returned. If all accounts fail or none are configured, an empty list may be returned or an error if appropriate.
+-   **Example Usage (Conceptual):** An MCP client calls this tool to get a list of all calendars from all accounts. The user might then be prompted to choose a calendar, and the client would store its `url` and `account_identifier` for subsequent operations.
 
 #### `caldav-nextcloud.list_caldav_events()`
--   **Description:** Fetches events from a specified calendar within an optional date range. If no date range is provided, it defaults to fetching events from 30 days ago to 1 year from the current date.
+-   **Description:** Fetches events from a specified calendar of a specific account, within an optional date range. If no date range is provided, it defaults to fetching events from 30 days ago to 1 year from the current date.
 -   **MCP Tool Name:** `caldav-nextcloud.list_caldav_events`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account this calendar belongs to. Obtained from `list_caldav_calendars` output.
     -   `calendar_url` (str): The absolute URL of the calendar to query. This URL is obtained from the `list_caldav_calendars` tool.
     -   `start_date` (str, optional): The start date for filtering events, in 'YYYY-MM-DD' format (e.g., "2023-01-01"). Dates are treated as UTC. Defaults to 30 days ago if not provided.
     -   `end_date` (str, optional): The end date for filtering events, in 'YYYY-MM-DD' format (e.g., "2023-12-31"). Dates are treated as UTC. Defaults to 1 year from the current date if not provided.
@@ -220,9 +243,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** After selecting a calendar, an MCP client uses this tool to list events for "next week" by providing the calendar's URL and calculated `start_date` and `end_date` for the upcoming week.
 
 #### `caldav-nextcloud.create_caldav_event()`
--   **Description:** Creates a new event in a specified calendar using a full iCalendar (VCS) string. The server validates the iCalendar content before processing.
+-   **Description:** Creates a new event in a specified calendar of a specific account, using a full iCalendar (VCS) string. The server validates the iCalendar content before processing.
 -   **MCP Tool Name:** `caldav-nextcloud.create_caldav_event`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `calendar_url` (str): The absolute URL of the calendar where the event will be created.
     -   `ical_content` (str): The full iCalendar string for the event. This should be a complete `BEGIN:VCALENDAR ... END:VCALENDAR` block containing one `VEVENT`.
         Example iCalendar content:
@@ -249,9 +273,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** An MCP client, after being asked to "Create an event for a 'Project Deadline' on March 25th, 2024, all day", would construct the appropriate `ical_content` and call this tool with the target calendar's URL.
 
 #### `caldav-nextcloud.update_caldav_event()`
--   **Description:** Updates an existing event identified by its URL. The provided iCalendar content completely replaces the existing event data.
+-   **Description:** Updates an existing event identified by its URL, within a specific account. The provided iCalendar content completely replaces the existing event data.
 -   **MCP Tool Name:** `caldav-nextcloud.update_caldav_event`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `event_url` (str): The absolute URL of the event to be updated. This is obtained from `list_caldav_events`.
     -   `ical_content` (str): The new, full iCalendar string for the event.
 -   **Successful Response:** A JSON object indicating success and providing the URL of the updated event (usually the same as the input `event_url`).
@@ -266,9 +291,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** If a user wants to reschedule an event, the MCP client would first fetch the event's current `ical_content` (or just its URL), allow modifications (e.g., changing `DTSTART`/`DTEND`), and then submit the updated `ical_content` to this tool along with the event's URL.
 
 #### `caldav-nextcloud.delete_caldav_event()`
--   **Description:** Deletes an event from the CalDAV server, identified by its URL.
+-   **Description:** Deletes an event from a specific account's CalDAV server, identified by its URL.
 -   **MCP Tool Name:** `caldav-nextcloud.delete_caldav_event`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `event_url` (str): The absolute URL of the event to be deleted.
 -   **Successful Response:** A JSON object indicating success and echoing the URL of the deleted event.
     Example:
@@ -280,9 +306,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** User asks to "delete the 'Team Meeting' event". The MCP client, having previously listed events and identified the URL for 'Team Meeting', calls this tool with that URL.
 
 #### `caldav-nextcloud.list_caldav_tasks()`
--   **Description:** Fetches tasks (VTODO components) from a specified calendar. It can optionally include completed tasks. The server parses iCalendar data to accurately filter tasks by their completion status.
+-   **Description:** Fetches tasks (VTODO components) from a specified calendar of a specific account. It can optionally include completed tasks. The server parses iCalendar data to accurately filter tasks by their completion status.
 -   **MCP Tool Name:** `caldav-nextcloud.list_caldav_tasks`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `calendar_url` (str): The absolute URL of the calendar to query.
     -   `include_completed` (bool, optional): If `True`, completed tasks are included. Defaults to `False` (only incomplete tasks are returned).
 -   **Successful Response:** A list of JSON objects, where each object represents a task with its URL and raw iCalendar data (which includes a VTODO component).
@@ -297,9 +324,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** An MCP client is asked to "Show my current tasks from the 'Work Tasks' calendar". It calls this tool with the calendar's URL and `include_completed=False`.
 
 #### `caldav-nextcloud.create_caldav_task()`
--   **Description:** Creates a new task in a specified calendar using a full iCalendar string. The iCalendar content must contain a VTODO component.
+-   **Description:** Creates a new task in a specified calendar of a specific account, using a full iCalendar string. The iCalendar content must contain a VTODO component.
 -   **MCP Tool Name:** `caldav-nextcloud.create_caldav_task`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `calendar_url` (str): The absolute URL of the calendar where the task will be created.
     -   `ical_content` (str): The full iCalendar string for the task. This should be a complete `BEGIN:VCALENDAR ... END:VCALENDAR` block containing one `VTODO`.
         Example iCalendar content for a task:
@@ -325,9 +353,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** User says, "Create a task to 'Buy groceries' due this Friday." The MCP client constructs the VTODO `ical_content` and calls this tool with the appropriate calendar URL.
 
 #### `caldav-nextcloud.update_caldav_task()`
--   **Description:** Updates an existing task identified by its URL. The provided iCalendar content (containing a VTODO) completely replaces the existing task data. This can be used to mark tasks as complete, change due dates, etc.
+-   **Description:** Updates an existing task identified by its URL, within a specific account. The provided iCalendar content (containing a VTODO) completely replaces the existing task data. This can be used to mark tasks as complete, change due dates, etc.
 -   **MCP Tool Name:** `caldav-nextcloud.update_caldav_task`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `task_url` (str): The absolute URL of the task to be updated.
     -   `ical_content` (str): The new, full iCalendar string for the task. To mark a task as complete, the `STATUS:COMPLETED` and `COMPLETED:YYYYMMDDTHHMMSSZ` properties should be set in the VTODO component.
         Example iCalendar for a completed task:
@@ -354,9 +383,10 @@ Common error types include:
 -   **Example Usage (Conceptual):** To mark a task as completed, the MCP client fetches the task's URL, then constructs a new `ical_content` with `STATUS:COMPLETED` and a `COMPLETED` timestamp, and calls this tool.
 
 #### `caldav-nextcloud.delete_caldav_task()`
--   **Description:** Deletes a task from the CalDAV server, identified by its URL.
+-   **Description:** Deletes a task from a specific account's CalDAV server, identified by its URL.
 -   **MCP Tool Name:** `caldav-nextcloud.delete_caldav_task`
 -   **Parameters:**
+    -   `account_identifier` (str): The URL of the CalDAV account.
     -   `task_url` (str): The absolute URL of the task to be deleted.
 -   **Successful Response:** A JSON object indicating success and echoing the URL of the deleted task.
     Example:
