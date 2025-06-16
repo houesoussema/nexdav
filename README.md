@@ -103,16 +103,9 @@ To make your new CalDAV server available to Claude, you need to configure your `
 
         {
           "mcpServers": {
-            "brave-search": {
-              "command": "npx",
-              "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-              "env": {
-                "BRAVE_API_KEY": ""
-              }
-            },
             "nexdav-mcp": {
               "command": "python",
-              "args": ["C:\\MCP\\Servers\\Dev\\nexdav-mcp\\server.py"],
+              "args": ["C:/MCP/Servers/Dev/nexdav/server.py"],
               "env": {
                 "CALDAV_URL": "https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/",
                 "CALDAV_USERNAME": "your_nextcloud_username",
