@@ -15,6 +15,7 @@ This project provides an MCP (Model Context Protocol) server that enables Claude
   - [5. Integrate with MCP SuperAssistant Proxy](#5-integrate-with-mcp-superassistant-proxy)
 - [Usage with Claude](#usage-with-claude)
 - [Tools Exposed](#tools-exposed)
+- [API Documentation](#api-documentation)
 - [Project Structure](#project-structure)
 - [Contributing](#contributing)
 - [License](#license)
@@ -131,6 +132,240 @@ The following tools are exposed by this MCP server. All tools include improved e
     -   Updates an existing task with a full iCalendar string (VTODO). Validates the provided `ical_content`. Returns an error if the content is not parsable.
 -   `caldav-nextcloud.delete_caldav_task(task_url: str)`
     -   Deletes a task by its URL.
+
+## API Documentation
+
+### Overview
+This API provides a way for MCP (Model Context Protocol) clients, such as Claude, to interact with a CalDAV server, with a specific focus on Nextcloud Calendar integration. It allows for managing calendar events and tasks. The API is structured around a set of tools (endpoints) that perform specific actions like listing calendars, creating events, or deleting tasks.
+
+### Authentication
+Authentication with the CalDAV server is handled via environment variables loaded by the server at startup. These variables are:
+-   `CALDAV_URL`: The base URL of your CalDAV server (e.g., `https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/`).
+-   `CALDAV_USERNAME`: Your CalDAV username.
+-   `CALDAV_PASSWORD`: Your CalDAV password.
+
+It is **strongly recommended** to use an "App Password" generated in your Nextcloud security settings for the `CALDAV_PASSWORD` instead of your main account password. This enhances security by limiting the scope of the password and allowing it to be revoked independently.
+
+Refer to the "Setup Instructions" section for details on configuring the `.env` file with these credentials.
+
+### Error Handling
+The API uses a consistent JSON format for error responses:
+
+    {
+        "status": "error",
+        "message": "A descriptive error message..."
+    }
+
+Common error types include:
+
+-   **`CalDAVConnectionError`**: Issues connecting to the CalDAV server or authentication failures (e.g., incorrect URL, username, or password).
+    Example:
+        {
+            "status": "error",
+            "message": "CalDAV connection error: Authentication failed for user your_username"
+        }
+    *(Note: For `list_caldav_calendars`, `list_caldav_events`, and `list_caldav_tasks` which return a list, the error might be wrapped in a list: `[{"status": "error", "message": "..."}]`)*
+
+-   **`ValueError`**: Typically occurs when invalid iCalendar content is provided to create or update operations.
+    Example:
+        {
+            "status": "error",
+            "message": "Invalid iCalendar content: The VCALENDAR component was not found."
+        }
+
+-   **Generic Unexpected Errors**: For any other server-side issues.
+    Example:
+        {
+            "status": "error",
+            "message": "An unexpected error occurred: details of the error"
+        }
+
+### Endpoints (Tools)
+
+#### `caldav-nextcloud.list_caldav_calendars()`
+-   **Description:** Retrieves a list of all calendars accessible to the configured CalDAV user. This is typically the first call an MCP client would make to discover available calendars.
+-   **MCP Tool Name:** `caldav-nextcloud.list_caldav_calendars`
+-   **Parameters:** None.
+-   **Successful Response:** A list of JSON objects, where each object represents a calendar.
+    Example:
+        [
+            {
+                "name": "Personal",
+                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/"
+            },
+            {
+                "name": "Work",
+                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/work_calendar/"
+            }
+        ]
+-   **Error Responses:** Refer to the general "Error Handling" section for connection errors. The error response will be a list containing a single error object.
+-   **Example Usage (Conceptual):** An MCP client calls this tool to get a list of calendars. The user might then be prompted to choose a calendar from this list for subsequent operations like listing events or creating a new one.
+
+#### `caldav-nextcloud.list_caldav_events()`
+-   **Description:** Fetches events from a specified calendar within an optional date range. If no date range is provided, it defaults to fetching events from 30 days ago to 1 year from the current date.
+-   **MCP Tool Name:** `caldav-nextcloud.list_caldav_events`
+-   **Parameters:**
+    -   `calendar_url` (str): The absolute URL of the calendar to query. This URL is obtained from the `list_caldav_calendars` tool.
+    -   `start_date` (str, optional): The start date for filtering events, in 'YYYY-MM-DD' format (e.g., "2023-01-01"). Dates are treated as UTC. Defaults to 30 days ago if not provided.
+    -   `end_date` (str, optional): The end date for filtering events, in 'YYYY-MM-DD' format (e.g., "2023-12-31"). Dates are treated as UTC. Defaults to 1 year from the current date if not provided.
+-   **Successful Response:** A list of JSON objects, where each object represents an event and contains its URL and raw iCalendar data.
+    Example:
+        [
+            {
+                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/event1.ics",
+                "data": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Nextcloud Tasks v0.9.5\r\nBEGIN:VEVENT\r\nUID:unique-id-123\r\nSUMMARY:Team Meeting\r\nDTSTART;VALUE=DATE-TIME:20240315T100000Z\r\nDTEND;VALUE=DATE-TIME:20240315T110000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+            }
+        ]
+-   **Error Responses:** Refer to the general "Error Handling" section for connection errors. The error response will be a list containing a single error object.
+-   **Example Usage (Conceptual):** After selecting a calendar, an MCP client uses this tool to list events for "next week" by providing the calendar's URL and calculated `start_date` and `end_date` for the upcoming week.
+
+#### `caldav-nextcloud.create_caldav_event()`
+-   **Description:** Creates a new event in a specified calendar using a full iCalendar (VCS) string. The server validates the iCalendar content before processing.
+-   **MCP Tool Name:** `caldav-nextcloud.create_caldav_event`
+-   **Parameters:**
+    -   `calendar_url` (str): The absolute URL of the calendar where the event will be created.
+    -   `ical_content` (str): The full iCalendar string for the event. This should be a complete `BEGIN:VCALENDAR ... END:VCALENDAR` block containing one `VEVENT`.
+        Example iCalendar content:
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            PRODID:-//MyClient//EN
+            BEGIN:VEVENT
+            UID:event-uid-@example.com
+            SUMMARY:Doctor Appointment
+            DTSTAMP:20240310T120000Z
+            DTSTART:20240320T140000Z
+            DTEND:20240320T150000Z
+            END:VEVENT
+            END:VCALENDAR
+-   **Successful Response:** A JSON object indicating success and providing the URL of the newly created event.
+    Example:
+        {
+            "status": "success",
+            "event_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/new_event_random_id.ics"
+        }
+-   **Error Responses:**
+    -   "Invalid iCalendar content": If the provided `ical_content` is malformed or not parsable.
+    -   Refer to the general "Error Handling" section for connection errors.
+-   **Example Usage (Conceptual):** An MCP client, after being asked to "Create an event for a 'Project Deadline' on March 25th, 2024, all day", would construct the appropriate `ical_content` and call this tool with the target calendar's URL.
+
+#### `caldav-nextcloud.update_caldav_event()`
+-   **Description:** Updates an existing event identified by its URL. The provided iCalendar content completely replaces the existing event data.
+-   **MCP Tool Name:** `caldav-nextcloud.update_caldav_event`
+-   **Parameters:**
+    -   `event_url` (str): The absolute URL of the event to be updated. This is obtained from `list_caldav_events`.
+    -   `ical_content` (str): The new, full iCalendar string for the event.
+-   **Successful Response:** A JSON object indicating success and providing the URL of the updated event (usually the same as the input `event_url`).
+    Example:
+        {
+            "status": "success",
+            "event_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/event1.ics"
+        }
+-   **Error Responses:**
+    -   "Invalid iCalendar content": If the provided `ical_content` is malformed.
+    -   Refer to the general "Error Handling" section for connection errors.
+-   **Example Usage (Conceptual):** If a user wants to reschedule an event, the MCP client would first fetch the event's current `ical_content` (or just its URL), allow modifications (e.g., changing `DTSTART`/`DTEND`), and then submit the updated `ical_content` to this tool along with the event's URL.
+
+#### `caldav-nextcloud.delete_caldav_event()`
+-   **Description:** Deletes an event from the CalDAV server, identified by its URL.
+-   **MCP Tool Name:** `caldav-nextcloud.delete_caldav_event`
+-   **Parameters:**
+    -   `event_url` (str): The absolute URL of the event to be deleted.
+-   **Successful Response:** A JSON object indicating success and echoing the URL of the deleted event.
+    Example:
+        {
+            "status": "success",
+            "event_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/event_to_delete.ics"
+        }
+-   **Error Responses:** Refer to the general "Error Handling" section for connection errors.
+-   **Example Usage (Conceptual):** User asks to "delete the 'Team Meeting' event". The MCP client, having previously listed events and identified the URL for 'Team Meeting', calls this tool with that URL.
+
+#### `caldav-nextcloud.list_caldav_tasks()`
+-   **Description:** Fetches tasks (VTODO components) from a specified calendar. It can optionally include completed tasks. The server parses iCalendar data to accurately filter tasks by their completion status.
+-   **MCP Tool Name:** `caldav-nextcloud.list_caldav_tasks`
+-   **Parameters:**
+    -   `calendar_url` (str): The absolute URL of the calendar to query.
+    -   `include_completed` (bool, optional): If `True`, completed tasks are included. Defaults to `False` (only incomplete tasks are returned).
+-   **Successful Response:** A list of JSON objects, where each object represents a task with its URL and raw iCalendar data (which includes a VTODO component).
+    Example:
+        [
+            {
+                "url": "https://your-nextcloud.com/remote.php/dav/calendars/username/tasks_calendar/task1.ics",
+                "data": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Nextcloud Tasks v0.9.5\r\nBEGIN:VTODO\r\nUID:unique-task-id-456\r\nSUMMARY:Submit Report\r\nDUE;VALUE=DATE:20240320\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+            }
+        ]
+-   **Error Responses:** Refer to the general "Error Handling" section for connection errors. The error response will be a list containing a single error object.
+-   **Example Usage (Conceptual):** An MCP client is asked to "Show my current tasks from the 'Work Tasks' calendar". It calls this tool with the calendar's URL and `include_completed=False`.
+
+#### `caldav-nextcloud.create_caldav_task()`
+-   **Description:** Creates a new task in a specified calendar using a full iCalendar string. The iCalendar content must contain a VTODO component.
+-   **MCP Tool Name:** `caldav-nextcloud.create_caldav_task`
+-   **Parameters:**
+    -   `calendar_url` (str): The absolute URL of the calendar where the task will be created.
+    -   `ical_content` (str): The full iCalendar string for the task. This should be a complete `BEGIN:VCALENDAR ... END:VCALENDAR` block containing one `VTODO`.
+        Example iCalendar content for a task:
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            PRODID:-//MyClient//EN
+            BEGIN:VTODO
+            UID:task-uid-@example.com
+            SUMMARY:Follow up on email
+            DUE;VALUE=DATE:20240322
+            STATUS:NEEDS-ACTION
+            END:VTODO
+            END:VCALENDAR
+-   **Successful Response:** A JSON object indicating success and providing the URL of the newly created task.
+    Example:
+        {
+            "status": "success",
+            "task_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/tasks_calendar/new_task_xyz.ics"
+        }
+-   **Error Responses:**
+    -   "Invalid iCalendar content": If the provided `ical_content` is malformed or does not represent a valid task.
+    -   Refer to the general "Error Handling" section for connection errors.
+-   **Example Usage (Conceptual):** User says, "Create a task to 'Buy groceries' due this Friday." The MCP client constructs the VTODO `ical_content` and calls this tool with the appropriate calendar URL.
+
+#### `caldav-nextcloud.update_caldav_task()`
+-   **Description:** Updates an existing task identified by its URL. The provided iCalendar content (containing a VTODO) completely replaces the existing task data. This can be used to mark tasks as complete, change due dates, etc.
+-   **MCP Tool Name:** `caldav-nextcloud.update_caldav_task`
+-   **Parameters:**
+    -   `task_url` (str): The absolute URL of the task to be updated.
+    -   `ical_content` (str): The new, full iCalendar string for the task. To mark a task as complete, the `STATUS:COMPLETED` and `COMPLETED:YYYYMMDDTHHMMSSZ` properties should be set in the VTODO component.
+        Example iCalendar for a completed task:
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            PRODID:-//MyClient//EN
+            BEGIN:VTODO
+            UID:task-uid-@example.com
+            SUMMARY:Follow up on email
+            DUE;VALUE=DATE:20240322
+            STATUS:COMPLETED
+            COMPLETED:20240311T100000Z
+            END:VTODO
+            END:VCALENDAR
+-   **Successful Response:** A JSON object indicating success and providing the URL of the updated task.
+    Example:
+        {
+            "status": "success",
+            "task_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/tasks_calendar/task1.ics"
+        }
+-   **Error Responses:**
+    -   "Invalid iCalendar content": If the `ical_content` is malformed.
+    -   Refer to the general "Error Handling" section for connection errors.
+-   **Example Usage (Conceptual):** To mark a task as completed, the MCP client fetches the task's URL, then constructs a new `ical_content` with `STATUS:COMPLETED` and a `COMPLETED` timestamp, and calls this tool.
+
+#### `caldav-nextcloud.delete_caldav_task()`
+-   **Description:** Deletes a task from the CalDAV server, identified by its URL.
+-   **MCP Tool Name:** `caldav-nextcloud.delete_caldav_task`
+-   **Parameters:**
+    -   `task_url` (str): The absolute URL of the task to be deleted.
+-   **Successful Response:** A JSON object indicating success and echoing the URL of the deleted task.
+    Example:
+        {
+            "status": "success",
+            "task_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/tasks_calendar/task_to_delete.ics"
+        }
+-   **Error Responses:** Refer to the general "Error Handling" section for connection errors.
+-   **Example Usage (Conceptual):** User asks to "delete the task 'Submit Report'". The MCP client, having identified the task's URL, calls this tool.
 
 ## Project Structure
 
