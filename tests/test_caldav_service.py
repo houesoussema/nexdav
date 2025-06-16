@@ -60,15 +60,18 @@ END:VCALENDAR
 @pytest.fixture
 def mock_dav_client_instance():
     mock_client = MagicMock(spec=caldav.DAVClient)
-    mock_client.principal = AsyncMock()
-    # Add other necessary mocked methods for caldav.DAVClient if needed by CalDAVService constructor or connect
+    # Methods like .principal(), .calendar(), .event(), .todo() will be MagicMocks,
+    # configured per test or by assigning a MagicMock to them directly.
+    # e.g., mock_client.principal = MagicMock()
     return mock_client
 
 @pytest.fixture
 def mock_principal():
-    principal = AsyncMock()
-    principal.calendars = AsyncMock(return_value=[]) # Default empty list
-    return principal
+    principal_mock = MagicMock(spec=caldav.Principal)
+    # Methods like .calendars() will be MagicMocks.
+    # e.g., principal_mock.calendars = MagicMock(return_value=[])
+    principal_mock.calendars = MagicMock(return_value=[]) # Default empty list
+    return principal_mock
 
 @pytest.fixture
 def service(mock_dav_client_instance, mock_principal):
@@ -90,7 +93,8 @@ def service_for_connect_test():
 async def test_connect_success(service_for_connect_test, mock_principal):
     with patch('caldav.DAVClient') as mock_dav_client_constructor:
         mock_client_instance = mock_dav_client_constructor.return_value
-        mock_client_instance.principal = AsyncMock(return_value=mock_principal)
+        # .principal() is a synchronous method, so its mock should be MagicMock
+        mock_client_instance.principal = MagicMock(return_value=mock_principal)
 
         await service_for_connect_test.connect()
         assert service_for_connect_test.client == mock_client_instance
@@ -113,8 +117,8 @@ async def test_connect_auth_error(service_for_connect_test):
     with patch('caldav.DAVClient') as mock_dav_client_constructor:
         # Make the principal() call on the instance raise AuthorizationError
         mock_client_instance = mock_dav_client_constructor.return_value
-        # Corrected line: caldav.lib.error not caldav.error
-        mock_client_instance.principal = AsyncMock(side_effect=caldav.lib.error.AuthorizationError("Test auth error"))
+        # .principal() is a synchronous method, its mock should be MagicMock
+        mock_client_instance.principal = MagicMock(side_effect=caldav.lib.error.AuthorizationError("Test auth error"))
 
         with pytest.raises(CalDAVConnectionError, match="Authentication failed for CalDAV server"):
             await service_for_connect_test.connect()
@@ -122,15 +126,16 @@ async def test_connect_auth_error(service_for_connect_test):
 
 @pytest.mark.asyncio
 async def test_get_calendars_success(service, mock_principal):
-    mock_cal1 = MagicMock()
+    mock_cal1 = MagicMock(spec=caldav.objects.Calendar) # Use spec
     mock_cal1.get_property = MagicMock(return_value="Personal")
     mock_cal1.url = "http://dummy.url/cal1"
 
-    mock_cal2 = MagicMock()
+    mock_cal2 = MagicMock(spec=caldav.objects.Calendar) # Use spec
     mock_cal2.get_property = MagicMock(return_value="Work")
     mock_cal2.url = "http://dummy.url/cal2"
 
-    mock_principal.calendars = AsyncMock(return_value=[mock_cal1, mock_cal2])
+    # .calendars() is a synchronous method, its mock should be MagicMock
+    mock_principal.calendars = MagicMock(return_value=[mock_cal1, mock_cal2])
 
     calendars = await service.get_calendars()
     assert len(calendars) == 2
@@ -144,8 +149,10 @@ async def test_get_calendars_connect_implicit_call(service_for_connect_test, moc
     service_for_connect_test.principal = None # Ensure principal is not set initially
     with patch('caldav.DAVClient') as mock_dav_client_constructor:
         mock_client_instance = mock_dav_client_constructor.return_value
-        mock_client_instance.principal = AsyncMock(return_value=mock_principal)
-        mock_principal.calendars = AsyncMock(return_value=[]) # Ensure calendars() can be called
+        # .principal() is sync
+        mock_client_instance.principal = MagicMock(return_value=mock_principal)
+        # .calendars() is sync
+        mock_principal.calendars = MagicMock(return_value=[]) # Ensure calendars() can be called
 
         await service_for_connect_test.get_calendars()
         mock_client_instance.principal.assert_called_once() # connect was called
@@ -155,13 +162,16 @@ async def test_get_calendars_connect_implicit_call(service_for_connect_test, moc
 @pytest.mark.asyncio
 async def test_get_events_success(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock()
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
+    # .calendar() is sync, returns a Calendar object mock
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
 
-    mock_event1 = MagicMock()
+    # This mock_event1 represents a caldav.objects.Event or similar, not an AsyncMock
+    mock_event1 = MagicMock(spec=caldav.objects.Event)
     mock_event1.url = "http://dummy.url/cal1/event1.ics"
     mock_event1.data = SAMPLE_EVENT_ICAL
-    mock_calendar_obj.date_search = AsyncMock(return_value=[mock_event1])
+    # .date_search() is sync
+    mock_calendar_obj.date_search = MagicMock(return_value=[mock_event1])
 
     start_date = datetime(2023, 1, 1, tzinfo=pytz.utc)
     end_date = datetime(2023, 1, 31, tzinfo=pytz.utc)
@@ -178,9 +188,9 @@ async def test_get_events_success(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_get_events_default_dates(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock()
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
-    mock_calendar_obj.date_search = AsyncMock(return_value=[]) # No events needed for this test
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
+    mock_calendar_obj.date_search = MagicMock(return_value=[]) # No events needed for this test
 
     await service.get_events(calendar_url) # Call with default dates
 
@@ -203,12 +213,14 @@ async def test_get_events_default_dates(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_create_event_success(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock()
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
 
-    mock_saved_event = MagicMock()
+    # This mock_saved_event represents a caldav.objects.Event or similar
+    mock_saved_event = MagicMock(spec=caldav.objects.Event)
     mock_saved_event.url = "http://dummy.url/cal1/newevent.ics"
-    mock_calendar_obj.save_event = AsyncMock(return_value=mock_saved_event)
+    # .save_event() is sync
+    mock_calendar_obj.save_event = MagicMock(return_value=mock_saved_event)
 
     result = await service.create_event(calendar_url, SAMPLE_EVENT_ICAL)
 
@@ -220,10 +232,12 @@ async def test_create_event_success(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_update_event_success(service, mock_dav_client_instance):
     event_url = "http://dummy.url/cal1/event1.ics"
-    mock_event_obj = AsyncMock(spec=caldav.objects.Event) # Use spec for caldav.objects.Event
-    mock_event_obj.url = event_url # Ensure the mock event has a URL
-    mock_event_obj.save = AsyncMock() # Mock the save method
-    mock_dav_client_instance.event = AsyncMock(return_value=mock_event_obj)
+    # .event() is sync, returns an Event object mock
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    mock_event_obj.url = event_url
+    # .save() is sync
+    mock_event_obj.save = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
 
     new_ical_content = SAMPLE_EVENT_ICAL.replace("Test Event", "Updated Test Event")
     result = await service.update_event(event_url, new_ical_content)
@@ -238,9 +252,10 @@ async def test_update_event_success(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_delete_event_success(service, mock_dav_client_instance):
     event_url = "http://dummy.url/cal1/event1.ics"
-    mock_event_obj = AsyncMock(spec=caldav.objects.Event)
-    mock_event_obj.delete = AsyncMock()
-    mock_dav_client_instance.event = AsyncMock(return_value=mock_event_obj)
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    # .delete() is sync
+    mock_event_obj.delete = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
 
     result = await service.delete_event(event_url)
 
@@ -253,10 +268,10 @@ async def test_delete_event_success(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_get_tasks_success_incomplete_only(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock() # Renamed to avoid conflict
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
 
-    mock_task_incomplete = MagicMock(spec=caldav.objects.Todo) # Use spec for caldav.objects.Todo
+    mock_task_incomplete = MagicMock(spec=caldav.objects.Todo)
     mock_task_incomplete.url = "http://dummy.url/cal1/task1.ics"
     mock_task_incomplete.data = SAMPLE_TASK_ICAL_INCOMPLETE
 
@@ -264,7 +279,8 @@ async def test_get_tasks_success_incomplete_only(service, mock_dav_client_instan
     mock_task_completed.url = "http://dummy.url/cal1/task2.ics"
     mock_task_completed.data = SAMPLE_TASK_ICAL_COMPLETED
 
-    mock_calendar_obj.todos = AsyncMock(return_value=[mock_task_incomplete, mock_task_completed])
+    # .todos() is sync
+    mock_calendar_obj.todos = MagicMock(return_value=[mock_task_incomplete, mock_task_completed])
 
     tasks = await service.get_tasks(calendar_url, include_completed=False)
 
@@ -277,8 +293,8 @@ async def test_get_tasks_success_incomplete_only(service, mock_dav_client_instan
 @pytest.mark.asyncio
 async def test_get_tasks_include_completed(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock()
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
 
     mock_task_incomplete = MagicMock(spec=caldav.objects.Todo)
     mock_task_incomplete.url = "http://dummy.url/cal1/task1.ics"
@@ -288,7 +304,7 @@ async def test_get_tasks_include_completed(service, mock_dav_client_instance):
     mock_task_completed.url = "http://dummy.url/cal1/task2.ics"
     mock_task_completed.data = SAMPLE_TASK_ICAL_COMPLETED
 
-    mock_calendar_obj.todos = AsyncMock(return_value=[mock_task_incomplete, mock_task_completed])
+    mock_calendar_obj.todos = MagicMock(return_value=[mock_task_incomplete, mock_task_completed])
 
     tasks = await service.get_tasks(calendar_url, include_completed=True)
 
@@ -300,8 +316,8 @@ async def test_get_tasks_include_completed(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_get_tasks_parsing_error_skip(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock()
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
 
     mock_task_valid = MagicMock(spec=caldav.objects.Todo)
     mock_task_valid.url = "http://dummy.url/cal1/task_valid.ics"
@@ -311,7 +327,7 @@ async def test_get_tasks_parsing_error_skip(service, mock_dav_client_instance):
     mock_task_invalid_data.url = "http://dummy.url/cal1/task_invalid.ics"
     mock_task_invalid_data.data = "BEGIN:VCALENDAR...INVALID_DATA...END:VCALENDAR" # Malformed
 
-    mock_calendar_obj.todos = AsyncMock(return_value=[mock_task_valid, mock_task_invalid_data])
+    mock_calendar_obj.todos = MagicMock(return_value=[mock_task_valid, mock_task_invalid_data])
 
     # When include_completed=False, parsing is attempted. Invalid task should be skipped.
     tasks = await service.get_tasks(calendar_url, include_completed=False)
@@ -321,12 +337,12 @@ async def test_get_tasks_parsing_error_skip(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_create_task_success(service, mock_dav_client_instance):
     calendar_url = "http://dummy.url/cal1"
-    mock_calendar_obj = AsyncMock()
-    mock_dav_client_instance.calendar = AsyncMock(return_value=mock_calendar_obj)
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
 
     mock_saved_task = MagicMock(spec=caldav.objects.Todo)
     mock_saved_task.url = "http://dummy.url/cal1/newtask.ics"
-    mock_calendar_obj.save_todo = AsyncMock(return_value=mock_saved_task) # save_todo for tasks
+    mock_calendar_obj.save_todo = MagicMock(return_value=mock_saved_task) # save_todo for tasks
 
     result = await service.create_task(calendar_url, SAMPLE_TASK_ICAL_INCOMPLETE)
 
@@ -338,11 +354,10 @@ async def test_create_task_success(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_update_task_success(service, mock_dav_client_instance):
     task_url = "http://dummy.url/cal1/task1.ics"
-    # Ensure the mock_task_obj has a .data attribute that can be set
-    mock_task_obj = AsyncMock(spec=caldav.objects.Todo)
-    mock_task_obj.url = task_url # Set the URL attribute for the mock
-    mock_task_obj.save = AsyncMock()
-    mock_dav_client_instance.todo = AsyncMock(return_value=mock_task_obj) # client.todo() for tasks
+    mock_task_obj = MagicMock(spec=caldav.objects.Todo)
+    mock_task_obj.url = task_url
+    mock_task_obj.save = MagicMock()
+    mock_dav_client_instance.todo = MagicMock(return_value=mock_task_obj)
 
     new_ical_content = SAMPLE_TASK_ICAL_INCOMPLETE.replace("Incomplete Task", "Updated Incomplete Task")
     result = await service.update_task(task_url, new_ical_content)
@@ -357,9 +372,9 @@ async def test_update_task_success(service, mock_dav_client_instance):
 @pytest.mark.asyncio
 async def test_delete_task_success(service, mock_dav_client_instance):
     task_url = "http://dummy.url/cal1/task1.ics"
-    mock_task_obj = AsyncMock(spec=caldav.objects.Todo)
-    mock_task_obj.delete = AsyncMock()
-    mock_dav_client_instance.todo = AsyncMock(return_value=mock_task_obj)
+    mock_task_obj = MagicMock(spec=caldav.objects.Todo)
+    mock_task_obj.delete = MagicMock()
+    mock_dav_client_instance.todo = MagicMock(return_value=mock_task_obj)
 
     result = await service.delete_task(task_url)
 

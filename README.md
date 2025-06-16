@@ -1,14 +1,16 @@
 # MCP CalDAV Nextcloud Integration Server
 
+**Note on Formatting:** Due to a technical limitation with writing files containing markdown code blocks via this interface, the code examples below are formatted using simple indentation or as plain text instead of fenced code blocks (e.g., ```bash). You can manually add the ```language fences back into the `README.md` file after it's created if desired.
+
 This project provides an MCP (Model Context Protocol) server that enables Claude or any other MCP-compatible client to interact with your CalDAV calendar, specifically designed for Nextcloud Calendar integration.
 
 ## Table of Contents
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Setup Instructions](#setup-instructions)
-  - [1. Create the Project Directory](#1-create-the-project-directory)
-  - [2. Place Files and Configure Environment Variables](#2-place-files-and-configure-environment-variables)
-  - [3. Set up Python Environment and Install Dependencies](#3-set-up-python-environment-and-install-dependencies)
+  - [1. Clone the Repository (if applicable)](#1-clone-the-repository-if-applicable)
+  - [2. Create and Configure Environment Variables](#2-create-and-configure-environment-variables)
+  - [3. Install Dependencies](#3-install-dependencies)
   - [4. Test the MCP Server (Optional)](#4-test-the-mcp-server-optional)
   - [5. Integrate with MCP SuperAssistant Proxy](#5-integrate-with-mcp-superassistant-proxy)
 - [Usage with Claude](#usage-with-claude)
@@ -42,64 +44,41 @@ Before you begin, ensure you have the following:
 
 ## Setup Instructions
 
-This section guides you through setting up the NexDAV MCP Server on your local machine, primarily focusing on Windows environments given typical setups.
+### 1. Clone the Repository (if applicable)
+If you received this project as a Git repository, clone it to your local machine:
+    git clone https://github.com/your-repo/mcp-caldav-server.git
+    cd mcp-caldav-server
+If you manually created the files, navigate to the `mcp-caldav-server` directory.
 
-### 1. Create the Project Directory
-First, create a dedicated directory for your MCP server. For example:
+### 2. Create and Configure Environment Variables
+Sensitive information like your CalDAV URL, username, and password should not be committed directly into your code. This project uses `python-dotenv` to load these from a `.env` file.
 
-    mkdir C:\MCP\Servers\Dev\nexdav-mcp
-
-### 2. Place Files and Configure Environment Variables
-Copy all the project files (`requirements.txt`, `caldav_service.py`, `server.py`, `.env.example`, `README.md`) into the newly created `nexdav-mcp` directory.
-
-Next, configure your CalDAV credentials:
-
-1.  **Create `.env` file:** Copy the provided `.env.example` to a new file named `.env` in the `nexdav-mcp` directory.
-    You can do this manually by copying the contents of `.env.example` into a new file named `.env` in the same folder.
+1.  **Create `.env` file:** Copy the provided `.env.example` to `.env` in the root of the project directory:
+        cp .env.example .env
 2.  **Edit `.env`:** Open the newly created `.env` file and fill in your actual Nextcloud CalDAV credentials:
-
         # .env
         CALDAV_URL="https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/"
         CALDAV_USERNAME="your_nextcloud_username"
         CALDAV_PASSWORD="your_nextcloud_app_password"
-
     *   **`CALDAV_URL`**: This is the base URL for your CalDAV calendar. You can usually find this in your Nextcloud Calendar settings (e.g., under "CalDAV primary URL" or "WebDAV / CalDAV"). Remember to include your username in the path as shown in the example.
     *   **`CALDAV_USERNAME`**: Your Nextcloud login username.
     *   **`CALDAV_PASSWORD`**: **Strongly recommended:** Use an "App password" generated in your Nextcloud user security settings. This limits the scope of the password and can be revoked independently.
 
-### 3. Set up Python Environment and Install Dependencies
-It's recommended to use a Python virtual environment to manage dependencies.
-
-1.  **Open Command Prompt/PowerShell** and navigate to your `nexdav-mcp` directory:
-
-        cd C:\MCP\Servers\Dev\nexdav-mcp
-
-2.  **Create a virtual environment** (if you don't have one already):
-
-        python -m venv venv
-
-3.  **Activate the virtual environment:**
-
-        .\venv\Scripts\activate
-
-4.  **Install required Python packages:**
-
-        pip install -r requirements.txt
+### 3. Install Dependencies
+Navigate to the project directory and install the required Python packages:
+    pip install -r requirements.txt
 
 ### 4. Test the MCP Server (Optional)
-You can test the MCP server locally to ensure it starts correctly and exposes its tools. Make sure your virtual environment is activated.
-
+You can test the MCP server locally using the `mcp` CLI tool (installed via `mcp[cli]`):
     mcp dev server.py
-
-This command will start the MCP server. It typically opens a web-based MCP Inspector in your default browser, where you can browse the exposed tools and even try invoking them directly to verify functionality. Check your terminal for the URL to the inspector (e.g., `http://127.0.0.1:8080/inspector`).
+This command will start the MCP server and usually open a web-based MCP Inspector in your browser, where you can see the exposed tools and even try invoking them. Check your terminal for the URL to the inspector.
 
 ### 5. Integrate with MCP SuperAssistant Proxy
 To make your new CalDAV server available to Claude, you need to configure your `mcp-superassistant-proxy` (or similar proxy setup).
 
-1.  **Locate your proxy's configuration file.** This is often named `claude.json` or similar. It's usually found in the proxy's installation directory.
-2.  **Add a new entry** under the `"mcpServers"` section for your `nexdav-mcp` server. Ensure the `command` points to `python` and `args` points to the **absolute path** of your `server.py` file. The `env` section should mirror the variables in your `.env` file.
-
-    Example `claude.json` entry:
+1.  **Locate your proxy's configuration file.** This is often named `claude.json` or similar.
+2.  **Add a new entry** under the `mcpServers` section for your `caldav-nextcloud` server.
+    Ensure the `command` points to `python` and `args` points to the absolute path of your `server.py` file. The `env` section should mirror the variables in your `.env` file.
 
         {
           "mcpServers": {
@@ -110,9 +89,9 @@ To make your new CalDAV server available to Claude, you need to configure your `
                 "BRAVE_API_KEY": ""
               }
             },
-            "nexdav-mcp": {
+            "caldav-nextcloud": {
               "command": "python",
-              "args": ["C:\\MCP\\Servers\\Dev\\nexdav-mcp\\server.py"],
+              "args": ["/absolute/path/to/your/mcp-caldav-server/server.py"],
               "env": {
                 "CALDAV_URL": "https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/",
                 "CALDAV_USERNAME": "your_nextcloud_username",
@@ -121,11 +100,9 @@ To make your new CalDAV server available to Claude, you need to configure your `
             }
           }
         }
-    **IMPORTANT:**
-    *   Replace `C:\\MCP\\Servers\\Dev\\nexdav-mcp\\server.py` with the actual full, absolute path where you have placed the `server.py` file on your Windows system. Remember to use double backslashes `\\` in JSON paths.
-    *   The `env` variables here are crucial for the MCP proxy to pass to your Python server. They should match the values in your `.env` file.
+    **IMPORTANT:** Replace `/absolute/path/to/your/mcp-caldav-server/server.py` with the actual full path where you have placed the `server.py` file on your system (e.g., `C:\\path\\to\\your\\mcp-caldav-server\\server.py` for Windows).
 
-3.  **Restart your `mcp-superassistant-proxy`** (and potentially Claude Desktop, or whichever application uses the proxy) for the changes to take effect. This will allow the proxy to discover and connect to your new `nexdav-mcp` server.
+3.  **Restart your `mcp-superassistant-proxy`** (and potentially Claude Desktop) for the changes to take effect.
 
 ## Usage with Claude
 Once integrated, Claude will be able to discover and use the tools provided by this MCP server. You can instruct Claude to:
@@ -143,8 +120,7 @@ Once integrated, Claude will be able to discover and use the tools provided by t
 
 The following tools are exposed by this MCP server. All tools include improved error handling for CalDAV server connection issues and will return an error message if the server cannot be reached or authentication fails. Errors related to invalid input (like malformed iCalendar data) are also reported.
 
-
--   `nexdav-mcp.list_caldav_calendars()`
+-   `caldav-nextcloud.list_caldav_calendars()`
     -   Lists all calendars accessible to the configured user.
 -   `caldav-nextcloud.list_caldav_events(calendar_url: str, start_date: str = None, end_date: str = None)`
     -   Lists events from a specific calendar. Dates should be 'YYYY-MM-DD'. Input dates are treated as UTC.
@@ -165,7 +141,7 @@ The following tools are exposed by this MCP server. All tools include improved e
 
 ## Project Structure
 
-    nexdav-mcp/
+    mcp-caldav-server/
     ├── .env                  # Your actual environment variables (ignored by git)
     ├── .env.example          # Example environment variables for setup
     ├── caldav_service.py     # Core logic for CalDAV interactions using the 'caldav' library
@@ -185,4 +161,3 @@ Contributions are welcome! Please feel free to open issues or submit pull reques
 
 ## License
 This project is open-sourced under the [MIT License](LICENSE). (You might want to create a LICENSE file if you are making this a public repo.)
-

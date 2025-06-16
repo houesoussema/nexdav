@@ -6,6 +6,7 @@ import pytz # For timezone handling
 import requests # For requests.exceptions.ConnectionError
 from icalendar import Calendar # For parsing iCalendar data
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ class CalDAVService:
                 username=self.username,
                 password=self.password
             )
-            self.principal = await self.client.principal()
+            # Wrap the synchronous call in asyncio.to_thread
+            self.principal = await asyncio.to_thread(self.client.principal)
             logger.info("Successfully connected to CalDAV server and fetched principal.")
         except requests.exceptions.ConnectionError as e:
             logger.error(f"CalDAV connection failed for {self.url}: {e}")
@@ -69,8 +71,15 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info("Fetching calendars...")
-        calendars_list_raw = await self.principal.calendars()
-        calendars_list = [{"name": cal.get_property(dav.DisplayName()), "url": str(cal.url)} for cal in calendars_list_raw]
+        # Wrap the synchronous call in asyncio.to_thread
+        calendars_raw = await asyncio.to_thread(self.principal.calendars)
+
+        calendars_list = []
+        for cal_obj in calendars_raw:
+            # Wrap the synchronous call in asyncio.to_thread
+            display_name = await asyncio.to_thread(cal_obj.get_property, dav.DisplayName())
+            calendars_list.append({"name": display_name, "url": str(cal_obj.url)})
+
         logger.info(f"Found {len(calendars_list)} calendars.")
         return calendars_list
 
@@ -94,7 +103,8 @@ class CalDAVService:
         logger.info(f"Fetching events for calendar: {calendar_url}, start: {start_date}, end: {end_date}")
         
         # Get the specific calendar object by its URL
-        calendar = await self.client.calendar(url=calendar_url)
+        # Wrap the synchronous call in asyncio.to_thread
+        calendar_obj = await asyncio.to_thread(self.client.calendar, url=calendar_url)
         
         # Set default date ranges if not provided
         now = datetime.now(pytz.utc)
@@ -104,7 +114,8 @@ class CalDAVService:
             end_date = now + timedelta(days=365) # Default: next year
 
         # Perform a date-range search for events
-        events_raw = await calendar.date_search(start=start_date, end=end_date)
+        # Wrap the synchronous call in asyncio.to_thread
+        events_raw = await asyncio.to_thread(calendar_obj.date_search, start=start_date, end=end_date)
         
         event_list = []
         for event_obj in events_raw: # Renamed to avoid confusion if event was a var name
@@ -127,8 +138,9 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to create event in calendar: {calendar_url}")
-        calendar = await self.client.calendar(url=calendar_url)
-        event = await calendar.save_event(ical=ical_content)
+        calendar_obj = await asyncio.to_thread(self.client.calendar, url=calendar_url)
+        # Wrap the synchronous call in asyncio.to_thread
+        event = await asyncio.to_thread(calendar_obj.save_event, ical=ical_content)
         logger.info(f"Successfully created event: {str(event.url)} in calendar: {calendar_url}")
         return {"status": "success", "event_url": str(event.url)}
 
@@ -147,11 +159,12 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to update event at URL: {event_url}")
-        event = await self.client.event(url=event_url)
-        event.data = ical_content
-        await event.save()
-        logger.info(f"Successfully updated event: {str(event.url)}")
-        return {"status": "success", "event_url": str(event.url)}
+        event_obj = await asyncio.to_thread(self.client.event, url=event_url)
+        event_obj.data = ical_content # This is a local assignment
+        # Wrap the synchronous call in asyncio.to_thread
+        await asyncio.to_thread(event_obj.save)
+        logger.info(f"Successfully updated event: {str(event_obj.url)}") # Use event_obj.url
+        return {"status": "success", "event_url": str(event_obj.url)} # Use event_obj.url
 
     async def delete_event(self, event_url: str):
         """
@@ -167,8 +180,9 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to delete event at URL: {event_url}")
-        event = await self.client.event(url=event_url)
-        await event.delete()
+        event_obj = await asyncio.to_thread(self.client.event, url=event_url)
+        # Wrap the synchronous call in asyncio.to_thread
+        await asyncio.to_thread(event_obj.delete)
         logger.info(f"Successfully deleted event: {event_url}")
         return {"status": "success", "event_url": event_url}
 
@@ -190,8 +204,10 @@ class CalDAVService:
             await self.connect()
         logger.info(f"Fetching tasks for calendar: {calendar_url}, include_completed: {include_completed}")
         
-        calendar_obj = await self.client.calendar(url=calendar_url) # Renamed to avoid conflict with icalendar.Calendar
-        tasks_raw = await calendar_obj.todos() # Get all tasks
+        # Wrap the synchronous call in asyncio.to_thread
+        calendar_obj = await asyncio.to_thread(self.client.calendar, url=calendar_url)
+        # Wrap the synchronous call in asyncio.to_thread
+        tasks_raw = await asyncio.to_thread(calendar_obj.todos)
 
         task_list = []
         for task_obj in tasks_raw: # task_obj is a caldav Task object
@@ -230,9 +246,10 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to create task in calendar: {calendar_url}")
-        calendar = await self.client.calendar(url=calendar_url)
+        calendar_obj = await asyncio.to_thread(self.client.calendar, url=calendar_url)
         # The save_todo method is typically used for VTODOs
-        task = await calendar.save_todo(ical=ical_content)
+        # Wrap the synchronous call in asyncio.to_thread
+        task = await asyncio.to_thread(calendar_obj.save_todo, ical=ical_content)
         logger.info(f"Successfully created task: {str(task.url)} in calendar: {calendar_url}")
         return {"status": "success", "task_url": str(task.url)}
 
@@ -251,11 +268,12 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to update task at URL: {task_url}")
-        task = await self.client.todo(url=task_url)
-        task.data = ical_content
-        await task.save()
-        logger.info(f"Successfully updated task: {str(task.url)}")
-        return {"status": "success", "task_url": str(task.url)}
+        task_obj = await asyncio.to_thread(self.client.todo, url=task_url)
+        task_obj.data = ical_content # Local assignment
+        # Wrap the synchronous call in asyncio.to_thread
+        await asyncio.to_thread(task_obj.save)
+        logger.info(f"Successfully updated task: {str(task_obj.url)}") # Use task_obj.url
+        return {"status": "success", "task_url": str(task_obj.url)} # Use task_obj.url
 
     async def delete_task(self, task_url: str):
         """
@@ -271,7 +289,8 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to delete task at URL: {task_url}")
-        task = await self.client.todo(url=task_url)
-        await task.delete()
+        task_obj = await asyncio.to_thread(self.client.todo, url=task_url)
+        # Wrap the synchronous call in asyncio.to_thread
+        await asyncio.to_thread(task_obj.delete)
         logger.info(f"Successfully deleted task: {task_url}")
         return {"status": "success", "task_url": task_url}
