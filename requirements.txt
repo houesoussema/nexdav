@@ -1,0 +1,4 @@
+caldav
+python-dotenv
+mcp
+mcp[cli]
