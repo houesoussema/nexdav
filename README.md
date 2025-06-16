@@ -23,10 +23,14 @@ This project provides an MCP (Model Context Protocol) server that enables Claude
 - **Create Event:** Add new events to a calendar using iCalendar (VCS) content.
 - **Update Event:** Modify existing events by providing new iCalendar content.
 - **Delete Event:** Remove events from a calendar.
-- **List Tasks:** Fetch tasks from a specified calendar, with an option to include completed tasks.
+- **List Tasks:** Fetch tasks from a specified calendar, with an option to include completed tasks. (Accurately filters completed tasks by parsing iCalendar data).
 - **Create Task:** Add new tasks to a calendar using iCalendar (VTODO) content.
 - **Update Task:** Modify existing tasks by providing new iCalendar (VTODO) content.
 - **Delete Task:** Remove tasks from a calendar.
+- **Error Handling:**
+    - Reports CalDAV connection and authentication failures.
+    - Validates iCalendar content for create/update operations and reports parsing errors.
+    - Errors are generally returned as JSON objects (e.g., `{"status": "error", "message": "..."}`).
 
 ## Prerequisites
 Before you begin, ensure you have the following:
@@ -137,25 +141,26 @@ Once integrated, Claude will be able to discover and use the tools provided by t
 
 ## Tools Exposed
 
-The following tools are exposed by this MCP server (prefix: `nexdav-mcp`):
+The following tools are exposed by this MCP server. All tools include improved error handling for CalDAV server connection issues and will return an error message if the server cannot be reached or authentication fails. Errors related to invalid input (like malformed iCalendar data) are also reported.
+
 
 -   `nexdav-mcp.list_caldav_calendars()`
     -   Lists all calendars accessible to the configured user.
--   `nexdav-mcp.list_caldav_events(calendar_url: str, start_date: str = None, end_date: str = None)`
-    -   Lists events from a specific calendar. Dates should be 'YYYY-MM-DD'.
--   `nexdav-mcp.create_caldav_event(calendar_url: str, ical_content: str)`
-    -   Creates a new event with a full iCalendar string.
--   `nexdav-mcp.update_caldav_event(event_url: str, ical_content: str)`
-    -   Updates an existing event with a full iCalendar string.
--   `nexdav-mcp.delete_caldav_event(event_url: str)`
+-   `caldav-nextcloud.list_caldav_events(calendar_url: str, start_date: str = None, end_date: str = None)`
+    -   Lists events from a specific calendar. Dates should be 'YYYY-MM-DD'. Input dates are treated as UTC.
+-   `caldav-nextcloud.create_caldav_event(calendar_url: str, ical_content: str)`
+    -   Creates a new event with a full iCalendar string. Validates the provided `ical_content`. Returns an error if the content is not parsable.
+-   `caldav-nextcloud.update_caldav_event(event_url: str, ical_content: str)`
+    -   Updates an existing event with a full iCalendar string. Validates the provided `ical_content`. Returns an error if the content is not parsable.
+-   `caldav-nextcloud.delete_caldav_event(event_url: str)`
     -   Deletes an event by its URL.
--   `nexdav-mcp.list_caldav_tasks(calendar_url: str, include_completed: bool = False)`
-    -   Lists tasks (VTODOs) from a specific calendar. `include_completed` is optional.
--   `nexdav-mcp.create_caldav_task(calendar_url: str, ical_content: str)`
-    -   Creates a new task with a full iCalendar string (VTODO).
--   `nexdav-mcp.update_caldav_task(task_url: str, ical_content: str)`
-    -   Updates an existing task with a full iCalendar string (VTODO).
--   `nexdav-mcp.delete_caldav_task(task_url: str)`
+-   `caldav-nextcloud.list_caldav_tasks(calendar_url: str, include_completed: bool = False)`
+    -   Lists tasks (VTODOs) from a specific calendar. `include_completed` is optional. Uses iCalendar parsing for accurate status filtering.
+-   `caldav-nextcloud.create_caldav_task(calendar_url: str, ical_content: str)`
+    -   Creates a new task with a full iCalendar string (VTODO). Validates the provided `ical_content`. Returns an error if the content is not parsable.
+-   `caldav-nextcloud.update_caldav_task(task_url: str, ical_content: str)`
+    -   Updates an existing task with a full iCalendar string (VTODO). Validates the provided `ical_content`. Returns an error if the content is not parsable.
+-   `caldav-nextcloud.delete_caldav_task(task_url: str)`
     -   Deletes a task by its URL.
 
 ## Project Structure
@@ -167,6 +172,13 @@ The following tools are exposed by this MCP server (prefix: `nexdav-mcp`):
     ├── server.py             # Main MCP server entry point and tool definitions using FastMCP
     ├── requirements.txt      # Python dependencies for the project
     └── README.md             # This documentation file
+
+## Logging
+The server uses Python's built-in `logging` module to record its operations.
+-   **Output:** By default, logs are output to standard output (stdout).
+-   **Level:** The default logging level is `INFO`. This includes informational messages about tool calls, successful operations, and errors.
+-   **Format:** Log messages typically include a timestamp, log level, logger name (module), and the message itself (e.g., `2023-10-27 10:00:00,123 - INFO - server - Tool 'list_caldav_calendars' called.`).
+-   **Purpose:** These logs are helpful for monitoring server activity, debugging, and diagnosing issues. For critical errors, stack trace information is also logged.
 
 ## Contributing
 Contributions are welcome! Please feel free to open issues or submit pull requests.
