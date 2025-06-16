@@ -174,5 +174,3 @@ Contributions are welcome! Please feel free to open issues or submit pull reques
 ## License
 This project is open-sourced under the [MIT License](LICENSE). (You might want to create a LICENSE file if you are making this a public repo.)
 
-## License
-This project is open-sourced under the [MIT License](LICENSE). (You might want to create a LICENSE file if you are making this a public repo.)
