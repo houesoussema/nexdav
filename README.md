@@ -42,38 +42,115 @@ Before you begin, ensure you have the following:
 - An "App password" generated in your Nextcloud security settings for better security (recommended over your main password).
 - The `mcp-superassistant-proxy` (or similar MCP client) configured and running.
 
-## Setup Instructions
+## Detailed Installation Guide (for Beginners)
 
-### 1. Clone the Repository (if applicable)
-If you received this project as a Git repository, clone it to your local machine:
-    git clone https://github.com/your-repo/mcp-caldav-server.git
-    cd mcp-caldav-server
-If you manually created the files, navigate to the `mcp-caldav-server` directory.
+This guide will walk you through setting up the MCP CalDAV Nextcloud Integration Server on your computer.
 
-### 2. Create and Configure Environment Variables
-Sensitive information like your CalDAV URL, username, and password should not be committed directly into your code. This project uses `python-dotenv` to load these from a `.env` file.
+**Part 1: Prerequisites (Things you need first)**
 
-1.  **Create `.env` file:** Copy the provided `.env.example` to `.env` in the root of the project directory:
-        cp .env.example .env
-2.  **Edit `.env`:** Open the newly created `.env` file and fill in your actual Nextcloud CalDAV credentials:
-        # .env
-        CALDAV_URL="https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/"
-        CALDAV_USERNAME="your_nextcloud_username"
-        CALDAV_PASSWORD="your_nextcloud_app_password"
-    *   **`CALDAV_URL`**: This is the base URL for your CalDAV calendar. You can usually find this in your Nextcloud Calendar settings (e.g., under "CalDAV primary URL" or "WebDAV / CalDAV"). Remember to include your username in the path as shown in the example.
-    *   **`CALDAV_USERNAME`**: Your Nextcloud login username.
-    *   **`CALDAV_PASSWORD`**: **Strongly recommended:** Use an "App password" generated in your Nextcloud user security settings. This limits the scope of the password and can be revoked independently.
+1.  **Install Python (if you don't have it):**
+    *   This server needs Python to run. Version 3.9 or newer is recommended.
+    *   **How to check if you have Python:** Open your terminal (Command Prompt on Windows, Terminal on macOS/Linux) and type `python --version` or `python3 --version`. If you see a version like "Python 3.9.x", you're good.
+    *   **How to install Python:** If you don't have it, download it from the official Python website: [https://www.python.org/downloads/](https://www.python.org/downloads/). Make sure to check the box that says "Add Python to PATH" during installation on Windows.
 
-### 3. Install Dependencies
-Navigate to the project directory and install the required Python packages:
-    pip install -r requirements.txt
+2.  **Access to a Nextcloud Instance:**
+    *   You need a Nextcloud account with a calendar you want to connect to.
+    *   You'll also need an "App Password" from Nextcloud for better security.
+        *   Log into your Nextcloud.
+        *   Go to Settings -> Security.
+        *   Under "App passwords" or "Devices & sessions", create a new app password (e.g., name it `mcp-caldav-server`). Note this password down securely; you'll need it soon.
 
-### 4. Test the MCP Server (Optional)
-You can test the MCP server locally using the `mcp` CLI tool (installed via `mcp[cli]`):
-    mcp dev server.py
-This command will start the MCP server and usually open a web-based MCP Inspector in your browser, where you can see the exposed tools and even try invoking them. Check your terminal for the URL to the inspector.
+**Part 2: Setting up the Server Code**
 
-### 5. Integrate with MCP SuperAssistant Proxy
+1.  **Get the Server Code:**
+    *   **If it's a Git repository (e.g., from GitHub):**
+        *   You'll need Git installed. If you don't have it, search "install git" for your operating system.
+        *   Open your terminal.
+        *   Navigate to where you want to store the server (e.g., `cd Documents`).
+        *   Clone the repository: `git clone <repository_url>` (replace `<repository_url>` with the actual URL of this project).
+        *   Change into the new directory: `cd mcp-caldav-server` (or the actual folder name of the project).
+    *   **If you have the files directly (e.g., downloaded as a ZIP):**
+        *   Create a new folder for the server (e.g., `my-mcp-caldav-server`).
+        *   Extract/copy all the server files (`.py` files, `requirements.txt`, `README.md`, etc.) into this folder.
+        *   Open your terminal and navigate into this folder: `cd path/to/your/my-mcp-caldav-server`.
+
+2.  **Create a Virtual Environment (Highly Recommended):**
+    *   A virtual environment keeps the server's Python packages separate from other Python projects on your system, preventing conflicts.
+    *   In your terminal, from inside the server's project folder:
+        *   Run: `python -m venv venv` (or `python3 -m venv venv` if `python` points to an older version).
+        *   This creates a `venv` folder inside your project.
+    *   **Activate the virtual environment:**
+        *   **On Windows (Command Prompt/PowerShell):** `venv\Scripts\activate`
+        *   **On macOS/Linux (bash/zsh):** `source venv/bin/activate`
+        *   You should see `(venv)` at the beginning of your terminal prompt. If you do, it's active!
+    *   *Remember: You need to activate the virtual environment every time you open a new terminal to work on this project.*
+
+3.  **Install Required Python Packages:**
+    *   Make sure your virtual environment is active (`(venv)` should be in your prompt).
+    *   In the terminal, from the project folder, run:
+        `pip install -r requirements.txt`
+    *   This command reads the `requirements.txt` file and installs all the necessary Python libraries for the server to run.
+    *   **For development or running local tests (optional but good practice):**
+        *   Also install development dependencies: `pip install -r requirements-dev.txt`
+        *   This installs tools like `pytest` for running tests and `mcp[cli]` for using `mcp dev`.
+
+4.  **Configure Environment Variables (Your Server Settings):**
+    *   The server needs your Nextcloud URL, username, and the app password you created. This is stored in a file named `.env`.
+    *   Find the file named `.env.example` in the project folder.
+    *   **Copy `.env.example` to a new file named `.env`:**
+        *   In your terminal (from the project folder):
+            *   **Windows:** `copy .env.example .env`
+            *   **macOS/Linux:** `cp .env.example .env`
+    *   **Edit the `.env` file:** Open the newly created `.env` file with a plain text editor (like Notepad on Windows, TextEdit on Mac (in plain text mode), VS Code, Sublime Text, nano, vim).
+        *   **`CALDAV_URL`**:
+            *   This is usually `https://YOUR_NEXTCLOUD_DOMAIN/remote.php/dav/calendars/YOUR_USERNAME/`
+            *   Replace `YOUR_NEXTCLOUD_DOMAIN` with your Nextcloud's web address (e.g., `cloud.example.com`).
+            *   Replace `YOUR_USERNAME` with your actual Nextcloud username.
+            *   **Example:** `CALDAV_URL="https://cloud.example.com/remote.php/dav/calendars/myuser/"`
+        *   **`CALDAV_USERNAME`**:
+            *   Your Nextcloud username.
+            *   **Example:** `CALDAV_USERNAME="myuser"`
+        *   **`CALDAV_PASSWORD`**:
+            *   The **App Password** you generated in Nextcloud (from Part 1, Step 2). Do NOT use your main Nextcloud password here if you created an app password.
+            *   **Example:** `CALDAV_PASSWORD="yourGeneratedAppPasswordHere"`
+    *   Save and close the `.env` file. This file is ignored by Git (if you're using Git), so your credentials stay private.
+
+**Part 3: Running and Testing the Server (Locally)**
+
+1.  **Ensure your virtual environment is active.** (See Part 2, Step 2).
+2.  **Start the Server for Development/Testing:**
+    *   In your terminal, from the project folder, run:
+        `mcp dev server.py`
+    *   This command (part of `mcp[cli]` which you installed via `requirements-dev.txt`) will start the MCP server.
+    *   You should see log messages in the terminal, including something like `INFO - __main__ - Starting MCP CalDAV Server...`.
+    *   The server might also print a URL for an "MCP Inspector" (e.g., `http://localhost:62700/inspector/`). You can open this URL in your web browser to see the available tools and test them.
+3.  **Stopping the Server:**
+    *   Press `Ctrl+C` in the terminal where the server is running.
+
+**Part 4: Integrating with an MCP Client (e.g., MCP SuperAssistant Proxy)**
+
+*   This server is designed to be used by an MCP client application. The section "Integrate with MCP SuperAssistant Proxy" below provides details on how to configure your client to use this server. You'll typically need to provide the absolute path to your `server.py` file and the environment variables from your `.env` file in the client's configuration.
+
+**Troubleshooting Common Issues:**
+
+*   **`ModuleNotFoundError: No module named 'caldav'` (or similar for other packages like `icalendar`, `dotenv`):**
+    *   **Is your virtual environment active?** You should see `(venv)` at the start of your terminal prompt. If not, activate it (see Part 2, Step 2).
+    *   **Did you install dependencies?** Ensure you ran `pip install -r requirements.txt` successfully *while the virtual environment was active*.
+    *   Try running `pip install -r requirements.txt` again just in case.
+*   **`python: command not found`, `pip: command not found`, `git: command not found`:**
+    *   These commands mean the respective program is not installed or not found in your system's PATH.
+        *   For `python` or `pip`: Python might not be installed correctly or not added to your system's PATH. Revisit Part 1, Step 1.
+        *   For `git`: You may need to install Git. Search online for "install git" for your operating system.
+*   **`mcp: command not found`:**
+    *   Ensure you ran `pip install -r requirements-dev.txt` (which includes `mcp[cli]`) while your virtual environment was active.
+    *   If `mcp` is installed but still not found, sometimes you might need to run it as `python -m mcp dev server.py`.
+*   **Connection Errors in Server Logs (e.g., "CalDAV connection error"):**
+    *   **Double-check your `.env` file:** Carefully verify your `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD`. Typos are common!
+    *   **Is your Nextcloud instance running and accessible?** Try opening your Nextcloud in a web browser.
+    *   **App Password Correct?** Ensure the password in `.env` is the app password, not your main Nextcloud password.
+    *   **URL Format:** Make sure the `CALDAV_URL` ends with a `/` and includes your username in the path as per the example.
+
+## Integrate with MCP SuperAssistant Proxy
 To make your new CalDAV server available to Claude, you need to configure your `mcp-superassistant-proxy` (or similar proxy setup).
 
 1.  **Locate your proxy's configuration file.** This is often named `claude.json` or similar.
@@ -82,9 +159,16 @@ To make your new CalDAV server available to Claude, you need to configure your `
 
         {
           "mcpServers": {
-            "nexdav-mcp": {
+            "brave-search": {
+              "command": "npx",
+              "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+              "env": {
+                "BRAVE_API_KEY": ""
+              }
+            },
+            "caldav-nextcloud": {
               "command": "python",
-              "args": ["C:/MCP/Servers/Dev/nexdav/server.py"],
+              "args": ["/absolute/path/to/your/mcp-caldav-server/server.py"],
               "env": {
                 "CALDAV_URL": "https://your-nextcloud-instance.com/remote.php/dav/calendars/YOUR_USERNAME/",
                 "CALDAV_USERNAME": "your_nextcloud_username",
