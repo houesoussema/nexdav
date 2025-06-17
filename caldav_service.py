@@ -268,7 +268,20 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to update task at URL: {task_url}")
-        task_obj = await asyncio.to_thread(self.client.todo, url=task_url)
+        # Fetch the object by URL
+        task_obj = await asyncio.to_thread(self.client.object_by_url, url=task_url)
+
+        # Check if the task object was found
+        if task_obj is None:
+            logger.error(f"Task not found at URL: {task_url}")
+            raise ValueError(f"Task not found at URL: {task_url}")
+
+        # Check if the fetched object is a VTODO task
+        # Accessing the iCalendar component name, common in caldav libraries
+        if not hasattr(task_obj, 'obj') or task_obj.obj.name != "VTODO":
+            logger.error(f"Object at URL {task_url} is not a VTODO task. Object: {task_obj}")
+            raise ValueError(f"Object at URL {task_obj.url if hasattr(task_obj, 'url') else task_url} is not a VTODO task.")
+
         task_obj.data = ical_content # Local assignment
         # Wrap the synchronous call in asyncio.to_thread
         await asyncio.to_thread(task_obj.save)
@@ -289,7 +302,19 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to delete task at URL: {task_url}")
-        task_obj = await asyncio.to_thread(self.client.todo, url=task_url)
+        # Fetch the object by URL
+        task_obj = await asyncio.to_thread(self.client.object_by_url, url=task_url)
+
+        # Check if the task object was found
+        if task_obj is None:
+            logger.error(f"Task not found at URL: {task_url}")
+            raise ValueError(f"Task not found at URL: {task_url}")
+
+        # Check if the fetched object is a VTODO task
+        if not hasattr(task_obj, 'obj') or task_obj.obj.name != "VTODO":
+            logger.error(f"Object at URL {task_url} is not a VTODO task. Object: {task_obj}")
+            raise ValueError(f"Object at URL {task_obj.url if hasattr(task_obj, 'url') else task_url} is not a VTODO task.")
+
         # Wrap the synchronous call in asyncio.to_thread
         await asyncio.to_thread(task_obj.delete)
         logger.info(f"Successfully deleted task: {task_url}")
