@@ -357,28 +357,79 @@ async def test_update_task_success(service, mock_dav_client_instance):
     mock_task_obj = MagicMock(spec=caldav.objects.Todo)
     mock_task_obj.url = task_url
     mock_task_obj.save = MagicMock()
-    mock_dav_client_instance.todo = MagicMock(return_value=mock_task_obj)
+    # Attributes for validation
+    mock_task_obj.obj = MagicMock()
+    mock_task_obj.obj.name = "VTODO"
+    mock_dav_client_instance.object_by_url = MagicMock(return_value=mock_task_obj)
 
     new_ical_content = SAMPLE_TASK_ICAL_INCOMPLETE.replace("Incomplete Task", "Updated Incomplete Task")
     result = await service.update_task(task_url, new_ical_content)
 
     assert result["status"] == "success"
     assert result["task_url"] == task_url
-    mock_dav_client_instance.todo.assert_called_once_with(url=task_url)
+    mock_dav_client_instance.object_by_url.assert_called_once_with(url=task_url)
     assert mock_task_obj.data == new_ical_content
     mock_task_obj.save.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_update_task_not_found(service, mock_dav_client_instance):
+    task_url = "http://dummy.url/cal1/nonexistenttask.ics"
+    mock_dav_client_instance.object_by_url = MagicMock(return_value=None)
+
+    with pytest.raises(ValueError, match=f"Task not found at URL: {task_url}"):
+        await service.update_task(task_url, "SOME ICAL CONTENT")
+    mock_dav_client_instance.object_by_url.assert_called_once_with(url=task_url)
+
+@pytest.mark.asyncio
+async def test_update_task_not_a_vtodo(service, mock_dav_client_instance):
+    task_url = "http://dummy.url/cal1/event_as_task.ics"
+    mock_non_task_obj = MagicMock() # Not a Todo spec
+    mock_non_task_obj.url = task_url
+    mock_non_task_obj.obj = MagicMock()
+    mock_non_task_obj.obj.name = "VEVENT" # Simulate it's an event
+    mock_dav_client_instance.object_by_url = MagicMock(return_value=mock_non_task_obj)
+
+    with pytest.raises(ValueError, match=f"Object at URL {task_url} is not a VTODO task."):
+        await service.update_task(task_url, "SOME ICAL CONTENT")
+    mock_dav_client_instance.object_by_url.assert_called_once_with(url=task_url)
 
 
 @pytest.mark.asyncio
 async def test_delete_task_success(service, mock_dav_client_instance):
     task_url = "http://dummy.url/cal1/task1.ics"
     mock_task_obj = MagicMock(spec=caldav.objects.Todo)
+    mock_task_obj.url = task_url # Set url attribute for the error message if not VTODO
     mock_task_obj.delete = MagicMock()
-    mock_dav_client_instance.todo = MagicMock(return_value=mock_task_obj)
+    # Attributes for validation
+    mock_task_obj.obj = MagicMock()
+    mock_task_obj.obj.name = "VTODO"
+    mock_dav_client_instance.object_by_url = MagicMock(return_value=mock_task_obj)
 
     result = await service.delete_task(task_url)
 
     assert result["status"] == "success"
     assert result["task_url"] == task_url
-    mock_dav_client_instance.todo.assert_called_once_with(url=task_url)
+    mock_dav_client_instance.object_by_url.assert_called_once_with(url=task_url)
     mock_task_obj.delete.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_delete_task_not_found(service, mock_dav_client_instance):
+    task_url = "http://dummy.url/cal1/nonexistenttask.ics"
+    mock_dav_client_instance.object_by_url = MagicMock(return_value=None)
+
+    with pytest.raises(ValueError, match=f"Task not found at URL: {task_url}"):
+        await service.delete_task(task_url)
+    mock_dav_client_instance.object_by_url.assert_called_once_with(url=task_url)
+
+@pytest.mark.asyncio
+async def test_delete_task_not_a_vtodo(service, mock_dav_client_instance):
+    task_url = "http://dummy.url/cal1/event_as_task.ics"
+    mock_non_task_obj = MagicMock() # Not a Todo spec
+    mock_non_task_obj.url = task_url
+    mock_non_task_obj.obj = MagicMock()
+    mock_non_task_obj.obj.name = "VEVENT" # Simulate it's an event
+    mock_dav_client_instance.object_by_url = MagicMock(return_value=mock_non_task_obj)
+
+    with pytest.raises(ValueError, match=f"Object at URL {task_url} is not a VTODO task."):
+        await service.delete_task(task_url)
+    mock_dav_client_instance.object_by_url.assert_called_once_with(url=task_url)
