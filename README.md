@@ -26,6 +26,7 @@ This project provides an MCP (Model Context Protocol) server that enables Claude
 - **List Events:** Fetch events from a specified calendar within a given date range.
 - **Create Event:** Add new events to a calendar using iCalendar (VCS) content.
 - **Update Event:** Modify existing events by providing new iCalendar content.
+- **Set Event Reminders:** Configure reminders (alarms) for events when creating or updating them.
 - **Delete Event:** Remove events from a calendar.
 - **List Tasks:** Fetch tasks from a specified calendar, with an option to include completed tasks. (Accurately filters completed tasks by parsing iCalendar data).
 - **Create Task:** Add new tasks to a calendar using iCalendar (VTODO) content.
@@ -110,7 +111,8 @@ To make your new CalDAV server available to Claude, you need to configure your `
 Once integrated, Claude will be able to discover and use the tools provided by this MCP server. You can instruct Claude to:
 - "List my CalDAV calendars."
 - "Show me events in my 'Personal Calendar' for next week."
-- "Create an event called 'Team Meeting' tomorrow at 10 AM in my 'Work Calendar'."
+- "Create an event called 'Team Meeting' tomorrow at 10 AM in my 'Work Calendar' with a reminder 15 minutes before."
+- "Update the event 'Project Deadline' to add a reminder 1 day before."
 - "Delete the event at [event URL]."
 - "List my tasks from the 'Work Tasks' calendar."
 - "Create a task called 'Submit report' in my 'Work Tasks' calendar due next Friday."
@@ -126,10 +128,15 @@ The following tools are exposed by this MCP server. All tools include improved e
     -   Retrieves a list of all calendars accessible to the configured CalDAV accounts. Each calendar object returned will include an `account_identifier` field, which is the URL of the account the calendar belongs to. This identifier is crucial for subsequent operations.
 -   `caldav-nextcloud.list_caldav_events(account_identifier: str, calendar_url: str, start_date: str = None, end_date: str = None)`
     -   Lists events from a specific calendar of a specific account. Uses the `account_identifier` (obtained from `list_caldav_calendars`) to select the CalDAV account. Dates should be 'YYYY-MM-DD' and are treated as UTC.
--   `caldav-nextcloud.create_caldav_event(account_identifier: str, calendar_url: str, ical_content: str)`
+-   `caldav-nextcloud.create_caldav_event(account_identifier: str, calendar_url: str, ical_content: str, reminder_minutes_before: int = None, reminder_description: str = None)`
     -   Creates a new event in a specific calendar of a specific account. Uses `account_identifier`. Validates `ical_content`.
--   `caldav-nextcloud.update_caldav_event(account_identifier: str, event_url: str, ical_content: str)`
-    -   Updates an existing event in a specific account. Uses `account_identifier`. Validates `ical_content`.
+    -   `reminder_minutes_before`: Optional. Number of minutes before the event for a reminder.
+    -   `reminder_description`: Optional. Custom text for the reminder.
+-   `caldav-nextcloud.update_caldav_event(account_identifier: str, event_url: str, ical_content: str = None, reminder_minutes_before: int = None, reminder_description: str = None)`
+    -   Updates an existing event in a specific account. Uses `account_identifier`.
+    -   `ical_content`: Optional. The new iCalendar string. If not provided, only reminder settings might be updated.
+    -   `reminder_minutes_before`: Optional. Number of minutes for a reminder. Set to `None` or `0` to remove existing reminders.
+    -   `reminder_description`: Optional. Custom text for the reminder.
 -   `caldav-nextcloud.delete_caldav_event(account_identifier: str, event_url: str)`
     -   Deletes an event from a specific account by its URL. Uses `account_identifier`.
 -   `caldav-nextcloud.list_caldav_tasks(account_identifier: str, calendar_url: str, include_completed: bool = False)`
@@ -261,6 +268,8 @@ Common error types include:
             DTEND:20240320T150000Z
             END:VEVENT
             END:VCALENDAR
+    -   `reminder_minutes_before` (int, optional): Number of minutes before the event start time for the reminder. If set and positive, a `VALARM` component (display alarm) will be added to the event.
+    -   `reminder_description` (str, optional): Custom description for the reminder. If not provided and a reminder is set, a default description like "Reminder" will be used.
 -   **Successful Response:** A JSON object indicating success and providing the URL of the newly created event.
     Example:
         {
@@ -270,15 +279,21 @@ Common error types include:
 -   **Error Responses:**
     -   "Invalid iCalendar content": If the provided `ical_content` is malformed or not parsable.
     -   Refer to the general "Error Handling" section for connection errors.
--   **Example Usage (Conceptual):** An MCP client, after being asked to "Create an event for a 'Project Deadline' on March 25th, 2024, all day", would construct the appropriate `ical_content` and call this tool with the target calendar's URL.
+-   **Example Usage (Conceptual):**
+    -   To create an event: "Create an event for 'Project Review' on July 1st, 2024, at 2 PM." The client constructs `ical_content`.
+    -   To create an event with a reminder: "Create an event 'Dentist Appointment' for July 5th, 2024, at 10 AM with a reminder 1 hour before." The client constructs `ical_content` and sets `reminder_minutes_before=60`.
 
 #### `caldav-nextcloud.update_caldav_event()`
--   **Description:** Updates an existing event identified by its URL, within a specific account. The provided iCalendar content completely replaces the existing event data.
+-   **Description:** Updates an existing event identified by its URL, within a specific account. It can update the event's iCalendar content and/or its reminder settings.
 -   **MCP Tool Name:** `caldav-nextcloud.update_caldav_event`
 -   **Parameters:**
     -   `account_identifier` (str): The URL of the CalDAV account.
     -   `event_url` (str): The absolute URL of the event to be updated. This is obtained from `list_caldav_events`.
-    -   `ical_content` (str): The new, full iCalendar string for the event.
+    -   `ical_content` (str, optional): The new, full iCalendar string for the event. If `None`, the existing event data is used as a base for reminder updates. If provided, it completely replaces the event's calendar data (excluding reminders, which are handled separately).
+    -   `reminder_minutes_before` (int, optional): Number of minutes before the event for a reminder.
+        -   If set to a positive value, a new reminder is created or an existing one is updated.
+        -   If set to `0` or `None`, any existing reminders on the event will be removed.
+    -   `reminder_description` (str, optional): Custom description for the reminder. If not provided and a reminder is set, a default description like "Reminder" will be used.
 -   **Successful Response:** A JSON object indicating success and providing the URL of the updated event (usually the same as the input `event_url`).
     Example:
         {
@@ -286,9 +301,12 @@ Common error types include:
             "event_url": "https://your-nextcloud.com/remote.php/dav/calendars/username/personal/event1.ics"
         }
 -   **Error Responses:**
-    -   "Invalid iCalendar content": If the provided `ical_content` is malformed.
+    -   "Invalid iCalendar content": If the provided `ical_content` (when not `None`) is malformed.
     -   Refer to the general "Error Handling" section for connection errors.
--   **Example Usage (Conceptual):** If a user wants to reschedule an event, the MCP client would first fetch the event's current `ical_content` (or just its URL), allow modifications (e.g., changing `DTSTART`/`DTEND`), and then submit the updated `ical_content` to this tool along with the event's URL.
+-   **Example Usage (Conceptual):**
+    -   Reschedule an event: User wants to move 'Team Meeting' to 3 PM. Client provides new `ical_content` with updated `DTSTART`/`DTEND`.
+    -   Add a reminder: "Add a 30-minute reminder to my 'Doctor Appointment' event." Client calls tool with `event_url`, `reminder_minutes_before=30`, and `ical_content=None`.
+    -   Remove a reminder: "Remove the reminder for 'Project Deadline'." Client calls tool with `event_url`, `reminder_minutes_before=None` (or `0`), and `ical_content=None`.
 
 #### `caldav-nextcloud.delete_caldav_event()`
 -   **Description:** Deletes an event from a specific account's CalDAV server, identified by its URL.

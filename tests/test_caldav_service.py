@@ -1,9 +1,9 @@
 # tests/test_caldav_service.py
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
-from icalendar import Calendar as ICalCalendar, Event as ICalEvent, Todo as ICalTodo # For creating test ical data
+from icalendar import Calendar as ICalCalendar, Event as ICalEvent, Todo as ICalTodo, Alarm as ICalAlarm
 
 # Make sure caldav_service is importable, adjust sys.path if necessary
 # This might require adding the root project directory to sys.path
@@ -227,6 +227,264 @@ async def test_create_event_success(service, mock_dav_client_instance):
     assert result["status"] == "success"
     assert result["event_url"] == "http://dummy.url/cal1/newevent.ics"
     mock_calendar_obj.save_event.assert_called_once_with(ical=SAMPLE_EVENT_ICAL)
+
+# --- Event Reminder Tests ---
+
+SAMPLE_EVENT_ICAL_NO_ALARM = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test Corp//NONSGML CalDAV Client//EN
+BEGIN:VEVENT
+UID:event-no-alarm
+DTSTAMP:20240315T000000Z
+SUMMARY:Event without alarm
+DTSTART:20240315T100000Z
+DTEND:20240315T110000Z
+END:VEVENT
+END:VCALENDAR"""
+
+@pytest.mark.asyncio
+async def test_create_event_without_reminder(service, mock_dav_client_instance):
+    calendar_url = "http://dummy.url/cal1"
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
+    mock_saved_event = MagicMock(spec=caldav.objects.Event)
+    mock_saved_event.url = "http://dummy.url/cal1/event_no_reminder.ics"
+    mock_calendar_obj.save_event = MagicMock(return_value=mock_saved_event)
+
+    await service.create_event(calendar_url, SAMPLE_EVENT_ICAL_NO_ALARM, reminder_minutes_before=None)
+
+    saved_ical_str = mock_calendar_obj.save_event.call_args[1]['ical']
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    for component in cal.walk():
+        if component.name == "VEVENT":
+            assert not any(sub.name == "VALARM" for sub in component.subcomponents), "VALARM should not be present"
+    mock_calendar_obj.save_event.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_event_with_reminder(service, mock_dav_client_instance):
+    calendar_url = "http://dummy.url/cal1"
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
+    mock_saved_event = MagicMock(spec=caldav.objects.Event)
+    mock_saved_event.url = "http://dummy.url/cal1/event_with_reminder.ics"
+    mock_calendar_obj.save_event = MagicMock(return_value=mock_saved_event)
+
+    await service.create_event(
+        calendar_url,
+        SAMPLE_EVENT_ICAL_NO_ALARM,
+        reminder_minutes_before=30,
+        reminder_description="Custom Reminder"
+    )
+
+    saved_ical_str = mock_calendar_obj.save_event.call_args[1]['ical']
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_found = False
+    for component in cal.walk("VEVENT"):
+        for sub_component in component.subcomponents:
+            if sub_component.name == "VALARM":
+                alarm_found = True
+                assert sub_component['ACTION'] == 'DISPLAY'
+                assert sub_component['DESCRIPTION'] == "Custom Reminder"
+                assert sub_component['TRIGGER'].to_ical() == b"-PT30M"
+                break
+        if alarm_found: break
+    assert alarm_found, "VALARM component was not found"
+
+
+@pytest.mark.asyncio
+async def test_create_event_with_reminder_default_description(service, mock_dav_client_instance):
+    calendar_url = "http://dummy.url/cal1"
+    mock_calendar_obj = MagicMock(spec=caldav.objects.Calendar)
+    mock_dav_client_instance.calendar = MagicMock(return_value=mock_calendar_obj)
+    mock_saved_event = MagicMock(spec=caldav.objects.Event)
+    mock_saved_event.url = "http://dummy.url/cal1/event_default_reminder.ics"
+    mock_calendar_obj.save_event = MagicMock(return_value=mock_saved_event)
+
+    await service.create_event(
+        calendar_url,
+        SAMPLE_EVENT_ICAL_NO_ALARM,
+        reminder_minutes_before=15
+    ) # No reminder_description
+
+    saved_ical_str = mock_calendar_obj.save_event.call_args[1]['ical']
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_found = False
+    for component in cal.walk("VEVENT"):
+        for sub_component in component.subcomponents:
+            if sub_component.name == "VALARM":
+                alarm_found = True
+                assert sub_component['DESCRIPTION'] == "Reminder" # Default description
+                assert sub_component['TRIGGER'].to_ical() == b"-PT15M"
+                break
+        if alarm_found: break
+    assert alarm_found, "VALARM component was not found"
+
+
+@pytest.mark.asyncio
+async def test_update_event_add_reminder_to_none(service, mock_dav_client_instance):
+    event_url = "http://dummy.url/cal1/event_no_alarm.ics"
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    mock_event_obj.url = event_url
+    mock_event_obj.data = SAMPLE_EVENT_ICAL_NO_ALARM # Event initially has no alarm
+    mock_event_obj.save = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
+
+    await service.update_event(
+        event_url,
+        ical_content=None, # Update based on existing data
+        reminder_minutes_before=60,
+        reminder_description="Add this reminder"
+    )
+
+    saved_ical_str = mock_event_obj.data # Data is updated on the object then saved
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_found = False
+    for component in cal.walk("VEVENT"):
+        for sub_component in component.subcomponents:
+            if sub_component.name == "VALARM":
+                alarm_found = True
+                assert sub_component['DESCRIPTION'] == "Add this reminder"
+                assert sub_component['TRIGGER'].to_ical() == b"-PT1H"
+                break
+        if alarm_found: break
+    assert alarm_found, "VALARM added successfully"
+    mock_event_obj.save.assert_called_once()
+
+SAMPLE_EVENT_ICAL_WITH_ALARM = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test Corp//NONSGML CalDAV Client//EN
+BEGIN:VEVENT
+UID:event-with-alarm
+DTSTAMP:20240315T000000Z
+SUMMARY:Event with an existing alarm
+DTSTART:20240315T120000Z
+DTEND:20240315T130000Z
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Initial Reminder
+TRIGGER:-PT15M
+END:VALARM
+END:VEVENT
+END:VCALENDAR"""
+
+@pytest.mark.asyncio
+async def test_update_event_update_existing_reminder(service, mock_dav_client_instance):
+    event_url = "http://dummy.url/cal1/event_with_alarm.ics"
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    mock_event_obj.url = event_url
+    mock_event_obj.data = SAMPLE_EVENT_ICAL_WITH_ALARM # Event has an alarm
+    mock_event_obj.save = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
+
+    await service.update_event(
+        event_url,
+        ical_content=None,
+        reminder_minutes_before=45,
+        reminder_description="Updated Reminder Text"
+    )
+
+    saved_ical_str = mock_event_obj.data
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_count = 0
+    for component in cal.walk("VEVENT"):
+        for sub_component in component.subcomponents:
+            if sub_component.name == "VALARM":
+                alarm_count += 1
+                assert sub_component['DESCRIPTION'] == "Updated Reminder Text"
+                assert sub_component['TRIGGER'].to_ical() == b"-PT45M"
+    assert alarm_count == 1, "VALARM should be updated, not duplicated"
+    mock_event_obj.save.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_update_event_remove_reminder(service, mock_dav_client_instance):
+    event_url = "http://dummy.url/cal1/event_with_alarm.ics"
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    mock_event_obj.url = event_url
+    mock_event_obj.data = SAMPLE_EVENT_ICAL_WITH_ALARM # Event has an alarm
+    mock_event_obj.save = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
+
+    await service.update_event(event_url, ical_content=None, reminder_minutes_before=0) # Remove by setting to 0
+
+    saved_ical_str = mock_event_obj.data
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_present = False
+    for component in cal.walk("VEVENT"):
+        if any(sub.name == "VALARM" for sub in component.subcomponents):
+            alarm_present = True
+            break
+    assert not alarm_present, "VALARM should have been removed"
+    mock_event_obj.save.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_update_event_update_data_and_add_reminder(service, mock_dav_client_instance):
+    event_url = "http://dummy.url/cal1/event_no_alarm.ics"
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    mock_event_obj.url = event_url
+    mock_event_obj.data = SAMPLE_EVENT_ICAL_NO_ALARM
+    mock_event_obj.save = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
+
+    new_ical_content_for_update = SAMPLE_EVENT_ICAL_NO_ALARM.replace("Event without alarm", "Updated Summary, Add Reminder")
+
+    await service.update_event(
+        event_url,
+        ical_content=new_ical_content_for_update,
+        reminder_minutes_before=20,
+        reminder_description="Reminder for updated event"
+    )
+
+    saved_ical_str = mock_event_obj.data
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_found = False
+    summary_updated = False
+    for component in cal.walk("VEVENT"):
+        if component.get("summary") == "Updated Summary, Add Reminder":
+            summary_updated = True
+        for sub_component in component.subcomponents:
+            if sub_component.name == "VALARM":
+                alarm_found = True
+                assert sub_component['DESCRIPTION'] == "Reminder for updated event"
+                assert sub_component['TRIGGER'].to_ical() == b"-PT20M"
+                break
+        if alarm_found and summary_updated: break
+    assert summary_updated, "Event summary should be updated"
+    assert alarm_found, "VALARM should be added"
+    mock_event_obj.save.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_update_event_update_data_and_remove_reminder(service, mock_dav_client_instance):
+    event_url = "http://dummy.url/cal1/event_with_alarm.ics"
+    mock_event_obj = MagicMock(spec=caldav.objects.Event)
+    mock_event_obj.url = event_url
+    mock_event_obj.data = SAMPLE_EVENT_ICAL_WITH_ALARM # Has an alarm
+    mock_event_obj.save = MagicMock()
+    mock_dav_client_instance.event = MagicMock(return_value=mock_event_obj)
+
+    new_ical_content_for_update = SAMPLE_EVENT_ICAL_WITH_ALARM.replace("Event with an existing alarm", "Updated Summary, Remove Reminder")
+
+    await service.update_event(
+        event_url,
+        ical_content=new_ical_content_for_update,
+        reminder_minutes_before=None # Remove reminder
+    )
+
+    saved_ical_str = mock_event_obj.data
+    cal = ICalCalendar.from_ical(saved_ical_str)
+    alarm_present = False
+    summary_updated = False
+    for component in cal.walk("VEVENT"):
+        if component.get("summary") == "Updated Summary, Remove Reminder":
+            summary_updated = True
+        if any(sub.name == "VALARM" for sub in component.subcomponents):
+            alarm_present = True
+            break
+    assert summary_updated, "Event summary should be updated"
+    assert not alarm_present, "VALARM should be removed"
+    mock_event_obj.save.assert_called_once()
+
+# End of Event Reminder Tests
 
 
 @pytest.mark.asyncio

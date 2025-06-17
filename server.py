@@ -153,7 +153,7 @@ async def list_caldav_events(account_identifier: str, calendar_url: str, start_d
 
 
 @mcp.tool()
-async def create_caldav_event(account_identifier: str, calendar_url: str, ical_content: str) -> dict:
+async def create_caldav_event(account_identifier: str, calendar_url: str, ical_content: str, reminder_minutes_before: int = None, reminder_description: str = None) -> dict:
     """
     Creates a new event in the specified CalDAV calendar of a specific account using iCalendar (VCS) content.
 
@@ -161,13 +161,15 @@ async def create_caldav_event(account_identifier: str, calendar_url: str, ical_c
         account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         calendar_url (str): The absolute URL of the calendar where the event will be created.
         ical_content (str): The full iCalendar (VCS) string for the event.
+        reminder_minutes_before (int, optional): Minutes before the event start to trigger a reminder. Defaults to None (no reminder).
+        reminder_description (str, optional): Description for the reminder. Defaults to None.
 
     Returns:
         dict: A dictionary indicating the 'status' of the operation ('success')
               and the 'event_url' of the newly created event.
               Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'create_caldav_event' called for account: {account_identifier}, calendar: {calendar_url} with ical_content (length: {len(ical_content)})")
+    logger.info(f"Tool 'create_caldav_event' called for account: {account_identifier}, calendar: {calendar_url}, reminder_minutes_before: {reminder_minutes_before}, reminder_description: {reminder_description} with ical_content (length: {len(ical_content)})")
     service = caldav_services_map.get(account_identifier)
     if not service:
         logger.error(f"Account identifier '{account_identifier}' not found in configured services for 'create_caldav_event'.")
@@ -180,7 +182,12 @@ async def create_caldav_event(account_identifier: str, calendar_url: str, ical_c
         return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
 
     try:
-        result = await service.create_event(calendar_url, ical_content)
+        result = await service.create_event(
+            calendar_url,
+            ical_content,
+            reminder_minutes_before=reminder_minutes_before,
+            reminder_description=reminder_description
+        )
         logger.info(f"Successfully created event for account {account_identifier}: {result.get('event_url')} in calendar: {calendar_url}")
         return result
     except CalDAVConnectionError as e:
@@ -191,34 +198,45 @@ async def create_caldav_event(account_identifier: str, calendar_url: str, ical_c
         return {"status": "error", "message": f"An unexpected error occurred for account {account_identifier}: {str(e)}"}
 
 @mcp.tool()
-async def update_caldav_event(account_identifier: str, event_url: str, ical_content: str) -> dict:
+async def update_caldav_event(account_identifier: str, event_url: str, ical_content: str = None, reminder_minutes_before: int = None, reminder_description: str = None) -> dict:
     """
-    Updates an existing CalDAV event in a specific account with new iCalendar content.
+    Updates an existing CalDAV event in a specific account with new iCalendar content and/or reminder settings.
 
     Args:
         account_identifier (str): The URL of the CalDAV account (serves as its identifier).
         event_url (str): The absolute URL of the event to be updated.
-        ical_content (str): The new full iCalendar (VCS) string for the event.
+        ical_content (str, optional): The new full iCalendar (VCS) string for the event.
+                                      If None, only reminder settings will be updated based on existing event data.
+        reminder_minutes_before (int, optional): Minutes before the event start to trigger a reminder.
+                                                 Set to 0 or None to remove existing reminders. Defaults to None.
+        reminder_description (str, optional): Description for the reminder. Defaults to None.
+
 
     Returns:
         dict: A dictionary indicating the 'status' of the operation ('success')
               and the 'event_url' of the updated event.
               Returns an error structure if the account_identifier is invalid.
     """
-    logger.info(f"Tool 'update_caldav_event' called for account: {account_identifier}, event: {event_url} with ical_content (length: {len(ical_content)})")
+    logger.info(f"Tool 'update_caldav_event' called for account: {account_identifier}, event: {event_url}, reminder_minutes_before: {reminder_minutes_before}, reminder_description: {reminder_description} with ical_content (length: {len(ical_content) if ical_content else 'None'})")
     service = caldav_services_map.get(account_identifier)
     if not service:
         logger.error(f"Account identifier '{account_identifier}' not found in configured services for 'update_caldav_event'.")
         return {"status": "error", "message": f"Account identifier '{account_identifier}' not found."}
 
-    try:
-        Calendar.from_ical(ical_content) # Validate iCalendar content
-    except ValueError as e:
-        logger.error(f"Invalid iCalendar content for account {account_identifier} in 'update_caldav_event' for event {event_url}: {str(e)}")
-        return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
+    if ical_content: # Validate iCalendar content only if provided
+        try:
+            Calendar.from_ical(ical_content)
+        except ValueError as e:
+            logger.error(f"Invalid iCalendar content for account {account_identifier} in 'update_caldav_event' for event {event_url}: {str(e)}")
+            return {"status": "error", "message": f"Invalid iCalendar content: {str(e)}"}
 
     try:
-        result = await service.update_event(event_url, ical_content)
+        result = await service.update_event(
+            event_url,
+            ical_content=ical_content,
+            reminder_minutes_before=reminder_minutes_before,
+            reminder_description=reminder_description
+        )
         logger.info(f"Successfully updated event for account {account_identifier}: {result.get('event_url')}")
         return result
     except CalDAVConnectionError as e:

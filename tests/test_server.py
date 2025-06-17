@@ -278,7 +278,12 @@ async def test_create_event_valid_account(mock_caldav_service_class):
         )
 
     assert result == expected_response
-    mocked_service.create_event.assert_called_once_with(calendar_url_to_test, ical_content)
+    mocked_service.create_event.assert_called_once_with(
+        calendar_url_to_test,
+        ical_content,
+        reminder_minutes_before=None, # Default if not provided
+        reminder_description=None   # Default if not provided
+    )
     mock_from_ical.assert_called_once_with(ical_content)
 
 
@@ -300,6 +305,133 @@ async def test_create_event_invalid_account(mock_caldav_service_class):
     if server.caldav_services_map:
         real_service = server.caldav_services_map["http://real.account/dav"]
         real_service.create_event.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_create_event_with_reminder_params(mock_caldav_service_class):
+    account_url = "http://caldav.test/dav"
+    calendar_url_to_test = f"{account_url}/cal1"
+    ical_content = "BEGIN:VCALENDAR..."
+    reminder_minutes = 30
+    reminder_desc = "Test Reminder"
+
+    with patch('os.getenv') as mock_getenv:
+        mock_getenv.return_value = json.dumps([{"url": account_url, "username": "user", "password": "pw"}])
+        importlib.reload(server)
+
+    mocked_service = server.caldav_services_map[account_url]
+    expected_response = {"status": "success", "event_url": f"{calendar_url_to_test}/newevent_reminder.ics"}
+    mocked_service.create_event = AsyncMock(return_value=expected_response)
+
+    with patch('icalendar.Calendar.from_ical') as mock_from_ical:
+        mock_from_ical.return_value = MagicMock()
+
+        result = await server.create_caldav_event(
+            account_identifier=account_url,
+            calendar_url=calendar_url_to_test,
+            ical_content=ical_content,
+            reminder_minutes_before=reminder_minutes,
+            reminder_description=reminder_desc
+        )
+
+    assert result == expected_response
+    mocked_service.create_event.assert_called_once_with(
+        calendar_url_to_test,
+        ical_content,
+        reminder_minutes_before=reminder_minutes,
+        reminder_description=reminder_desc
+    )
+    mock_from_ical.assert_called_once_with(ical_content)
+
+
+# --- Tests for update_caldav_event ---
+
+@pytest.mark.asyncio
+async def test_update_event_valid_account(mock_caldav_service_class):
+    account_url = "http://caldav.test/dav"
+    event_url_to_test = f"{account_url}/cal1/event1.ics"
+    ical_content = "BEGIN:VCALENDAR..."
+
+    with patch('os.getenv') as mock_getenv:
+        mock_getenv.return_value = json.dumps([{"url": account_url, "username": "user", "password": "pw"}])
+        importlib.reload(server)
+
+    mocked_service = server.caldav_services_map[account_url]
+    expected_response = {"status": "success", "event_url": event_url_to_test}
+    mocked_service.update_event = AsyncMock(return_value=expected_response)
+
+    with patch('icalendar.Calendar.from_ical') as mock_from_ical:
+        mock_from_ical.return_value = MagicMock()
+
+        result = await server.update_caldav_event(
+            account_identifier=account_url,
+            event_url=event_url_to_test,
+            ical_content=ical_content
+        )
+
+    assert result == expected_response
+    mocked_service.update_event.assert_called_once_with(
+        event_url_to_test,
+        ical_content=ical_content,
+        reminder_minutes_before=None, # Default
+        reminder_description=None   # Default
+    )
+    mock_from_ical.assert_called_once_with(ical_content)
+
+
+@pytest.mark.asyncio
+async def test_update_event_with_reminder_params(mock_caldav_service_class):
+    account_url = "http://caldav.test/dav"
+    event_url_to_test = f"{account_url}/cal1/event1.ics"
+    ical_content = "BEGIN:VCALENDAR..." # Can be None if only updating reminder
+    reminder_minutes = 60
+    reminder_desc = "Updated Reminder"
+
+    with patch('os.getenv') as mock_getenv:
+        mock_getenv.return_value = json.dumps([{"url": account_url, "username": "user", "password": "pw"}])
+        importlib.reload(server)
+
+    mocked_service = server.caldav_services_map[account_url]
+    expected_response = {"status": "success", "event_url": event_url_to_test}
+    mocked_service.update_event = AsyncMock(return_value=expected_response)
+
+    # Test with ical_content provided
+    with patch('icalendar.Calendar.from_ical') as mock_from_ical:
+        mock_from_ical.return_value = MagicMock()
+        result = await server.update_caldav_event(
+            account_identifier=account_url,
+            event_url=event_url_to_test,
+            ical_content=ical_content,
+            reminder_minutes_before=reminder_minutes,
+            reminder_description=reminder_desc
+        )
+    assert result == expected_response
+    mocked_service.update_event.assert_called_once_with(
+        event_url_to_test,
+        ical_content=ical_content,
+        reminder_minutes_before=reminder_minutes,
+        reminder_description=reminder_desc
+    )
+    mock_from_ical.assert_called_once_with(ical_content)
+
+    # Test with ical_content as None (only updating reminder)
+    mocked_service.update_event.reset_mock() # Reset call count for next assertion
+    with patch('icalendar.Calendar.from_ical') as mock_from_ical_none: # New mock for this call
+        result_reminder_only = await server.update_caldav_event(
+            account_identifier=account_url,
+            event_url=event_url_to_test,
+            ical_content=None, # Testing this case
+            reminder_minutes_before=reminder_minutes,
+            reminder_description=reminder_desc
+        )
+    assert result_reminder_only == expected_response
+    mocked_service.update_event.assert_called_once_with(
+        event_url_to_test,
+        ical_content=None,
+        reminder_minutes_before=reminder_minutes,
+        reminder_description=reminder_desc
+    )
+    mock_from_ical_none.assert_not_called() # Should not be called if ical_content is None
+
 
 # --- Tests for task-related tools like list_caldav_tasks ---
 

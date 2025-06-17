@@ -4,7 +4,7 @@ from caldav.lib.error import AuthorizationError as CalDAVAuthorizationError # Re
 from datetime import datetime, date, timedelta
 import pytz # For timezone handling
 import requests # For requests.exceptions.ConnectionError
-from icalendar import Calendar # For parsing iCalendar data
+from icalendar import Calendar, Alarm # For parsing iCalendar data
 import logging
 import asyncio
 
@@ -123,13 +123,15 @@ class CalDAVService:
         logger.info(f"Found {len(event_list)} events for calendar: {calendar_url}.")
         return event_list
 
-    async def create_event(self, calendar_url: str, ical_content: str):
+    async def create_event(self, calendar_url: str, ical_content: str, reminder_minutes_before: int = None, reminder_description: str = None):
         """
         Creates a new event in the specified calendar using iCalendar content.
 
         Args:
             calendar_url (str): The URL of the calendar where the event will be created.
             ical_content (str): The full iCalendar (VCS) string of the event.
+            reminder_minutes_before (int, optional): Minutes before the event start to trigger a reminder.
+            reminder_description (str, optional): Description for the reminder.
 
         Returns:
             dict: A dictionary indicating the 'status' of the operation and the
@@ -138,19 +140,37 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to create event in calendar: {calendar_url}")
+
+        cal = Calendar.from_ical(ical_content)
+        for component in cal.walk():
+            if component.name == "VEVENT":
+                if reminder_minutes_before is not None and reminder_minutes_before > 0:
+                    alarm = Alarm()
+                    alarm.add('action', 'DISPLAY')
+                    alarm.add('description', reminder_description or "Reminder")
+                    alarm.add('trigger', timedelta(minutes=-reminder_minutes_before))
+                    component.add_component(alarm)
+                break # Assuming only one VEVENT per ical_content for creation
+
+        modified_ical_content = cal.to_ical().decode('utf-8')
+
         calendar_obj = await asyncio.to_thread(self.client.calendar, url=calendar_url)
         # Wrap the synchronous call in asyncio.to_thread
-        event = await asyncio.to_thread(calendar_obj.save_event, ical=ical_content)
+        event = await asyncio.to_thread(calendar_obj.save_event, ical=modified_ical_content)
         logger.info(f"Successfully created event: {str(event.url)} in calendar: {calendar_url}")
         return {"status": "success", "event_url": str(event.url)}
 
-    async def update_event(self, event_url: str, ical_content: str):
+    async def update_event(self, event_url: str, ical_content: str = None, reminder_minutes_before: int = None, reminder_description: str = None):
         """
-        Updates an existing event with new iCalendar content.
+        Updates an existing event with new iCalendar content and/or reminder settings.
 
         Args:
             event_url (str): The URL of the event to be updated.
-            ical_content (str): The new full iCalendar (VCS) string for the event.
+            ical_content (str, optional): The new full iCalendar (VCS) string for the event.
+                                         If None, the existing event data will be used for reminder updates.
+            reminder_minutes_before (int, optional): Minutes before the event start to trigger a reminder.
+                                                     Set to 0 or None to remove existing reminders.
+            reminder_description (str, optional): Description for the reminder.
 
         Returns:
             dict: A dictionary indicating the 'status' of the operation and the
@@ -159,12 +179,50 @@ class CalDAVService:
         if not self.principal:
             await self.connect()
         logger.info(f"Attempting to update event at URL: {event_url}")
+
         event_obj = await asyncio.to_thread(self.client.event, url=event_url)
-        event_obj.data = ical_content # This is a local assignment
+
+        # Use provided ical_content or existing event data
+        current_ical_data = ical_content if ical_content else event_obj.data
+        if not current_ical_data:
+            logger.error(f"No iCalendar data found for event {event_url} and none provided.")
+            # Or raise an error, depending on desired behavior
+            return {"status": "error", "message": "No iCalendar data available for update."}
+
+        cal = Calendar.from_ical(current_ical_data)
+
+        vevent_found = False
+        for component in cal.walk():
+            if component.name == "VEVENT":
+                vevent_found = True
+                # Remove existing alarms
+                alarms = component.subcomponents[:] # Iterate over a copy
+                for alarm_component in alarms:
+                    if alarm_component.name == "VALARM":
+                        component.subcomponents.remove(alarm_component)
+
+                # Add new alarm if specified
+                if reminder_minutes_before is not None and reminder_minutes_before > 0:
+                    new_alarm = Alarm()
+                    new_alarm.add('action', 'DISPLAY')
+                    new_alarm.add('description', reminder_description or "Reminder")
+                    new_alarm.add('trigger', timedelta(minutes=-reminder_minutes_before))
+                    component.add_component(new_alarm)
+                break # Process only the first VEVENT
+
+        if not vevent_found:
+            logger.warning(f"No VEVENT found in iCalendar data for event {event_url}. Cannot update reminder.")
+            # Depending on requirements, you might want to return an error or proceed without reminder changes
+            # For now, we'll proceed with saving whatever ical_content was passed or existed,
+            # as the primary purpose might not have been reminder update.
+
+        modified_ical_content = cal.to_ical().decode('utf-8')
+        event_obj.data = modified_ical_content # Update data on the object
+
         # Wrap the synchronous call in asyncio.to_thread
         await asyncio.to_thread(event_obj.save)
-        logger.info(f"Successfully updated event: {str(event_obj.url)}") # Use event_obj.url
-        return {"status": "success", "event_url": str(event_obj.url)} # Use event_obj.url
+        logger.info(f"Successfully updated event: {str(event_obj.url)}")
+        return {"status": "success", "event_url": str(event_obj.url)}
 
     async def delete_event(self, event_url: str):
         """
